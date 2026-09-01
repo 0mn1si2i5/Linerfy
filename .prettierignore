@@ -1,0 +1,7 @@
+.next/
+.vite/
+node_modules/
+out/
+pnpm-lock.yaml
+ingest/uv.lock
+ingest/.venv/

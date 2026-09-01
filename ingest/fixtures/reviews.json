@@ -1,0 +1,38 @@
+[
+  {
+    "id": "pitchfork-nfr",
+    "source_id": "pitchfork",
+    "source_url": "https://pitchfork.com/reviews/albums/lana-del-rey-norman-fucking-rockwell/",
+    "title": "Norman Fucking Rockwell!",
+    "author": "Jenn Pelly",
+    "published_at": "2019-09-03",
+    "public_excerpt": "A precise, fictionalized portrait of America told through intimate songwriting.",
+    "policy": {
+      "source_id": "pitchfork",
+      "crawl_allowed": false,
+      "requests_per_minute": 10,
+      "retention_days": 30,
+      "excerpt_max_chars": 280,
+      "attribution_required": true,
+      "removal_contact": "rights@linerfy.local"
+    }
+  },
+  {
+    "id": "guardian-nfr",
+    "source_id": "guardian",
+    "source_url": "https://www.theguardian.com/music/2019/aug/30/lana-del-rey-norman-fucking-rockwell-review",
+    "title": "Norman Fucking Rockwell! review",
+    "author": "Alexis Petridis",
+    "published_at": "2019-08-30",
+    "public_excerpt": "Classic songwriting and contemporary unease meet in a remarkably coherent album.",
+    "policy": {
+      "source_id": "guardian",
+      "crawl_allowed": false,
+      "requests_per_minute": 10,
+      "retention_days": 30,
+      "excerpt_max_chars": 280,
+      "attribution_required": true,
+      "removal_contact": "rights@linerfy.local"
+    }
+  }
+]

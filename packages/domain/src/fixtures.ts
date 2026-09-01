@@ -1,0 +1,81 @@
+import type { MusicContext } from "./index";
+
+export const featuredContext = {
+  artist: {
+    id: "lana-del-rey",
+    name: "Lana Del Rey",
+  },
+  release: {
+    id: "norman-fucking-rockwell",
+    title: "Norman Fucking Rockwell!",
+    artistId: "lana-del-rey",
+    year: 2019,
+    artworkUrl:
+      "https://is1-ssl.mzstatic.com/image/thumb/Music124/v4/ff/47/81/ff478132-f003-8a39-9f31-2e4c2c9ad8e6/19UMGIM61350.rgb.jpg/1200x1200bb.jpg",
+  },
+  recordings: [
+    {
+      id: "mariners-apartment-complex",
+      title: "Mariners Apartment Complex",
+      releaseId: "norman-fucking-rockwell",
+      providerIds: {},
+    },
+  ],
+  genres: [
+    {
+      name: "Singer-Songwriter",
+      sourceIds: ["pitchfork-nfr"],
+    },
+    {
+      name: "Psychedelic Pop",
+      sourceIds: ["guardian-nfr"],
+    },
+  ],
+  sources: [
+    {
+      id: "pitchfork-nfr",
+      publication: "Pitchfork",
+      author: "Jenn Pelly",
+      title: "Norman Fucking Rockwell!",
+      url: "https://pitchfork.com/reviews/albums/lana-del-rey-norman-fucking-rockwell/",
+      publishedAt: "2019-09-03",
+      score: { value: 9.4, scale: 10 },
+    },
+    {
+      id: "guardian-nfr",
+      publication: "The Guardian",
+      author: "Alexis Petridis",
+      title: "Lana Del Rey: Norman Fucking Rockwell! review",
+      url: "https://www.theguardian.com/music/2019/aug/29/lana-del-rey-norman-fucking-rockwell-review",
+      publishedAt: "2019-08-29",
+      score: { value: 4, scale: 5 },
+    },
+  ],
+  excerpts: [
+    {
+      id: "pitchfork-nfr-excerpt",
+      sourceId: "pitchfork-nfr",
+      kind: "paraphrase",
+      text: "The review treats the album as a major statement built from patient songwriting and a sharply observed American mythology.",
+    },
+    {
+      id: "guardian-nfr-excerpt",
+      sourceId: "guardian-nfr",
+      kind: "paraphrase",
+      text: "The review emphasizes how classic songwriting craft and an unstable cultural backdrop strengthen one another.",
+    },
+  ],
+  summary: {
+    locale: "zh-CN",
+    corpusHash: "fixture:nfr:v1",
+    model: "fixture-editorial-v1",
+    generatedAt: "2026-09-02T00:00:00.000Z",
+    claims: [
+      {
+        id: "nfr-consensus",
+        text: "评论者普遍认为，这张专辑把精细的写作、松弛的制作与美国流行文化的衰败感结合成了 Lana Del Rey 最完整的表达之一。",
+        sourceIds: ["pitchfork-nfr", "guardian-nfr"],
+      },
+    ],
+  },
+} satisfies MusicContext;
