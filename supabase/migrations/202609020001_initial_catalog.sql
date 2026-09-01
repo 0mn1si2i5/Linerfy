@@ -101,19 +101,9 @@ create table public.claim_sources (
   primary key (claim_id, document_id)
 );
 
-create table public.coverage_requests (
-  id uuid primary key default gen_random_uuid(),
-  provider text not null,
-  provider_id text not null,
-  requested_at timestamptz not null default now(),
-  request_fingerprint text not null,
-  status text not null default 'queued' check (status in ('queued', 'processing', 'complete', 'rejected'))
-);
-
 create index review_documents_release_status_idx
   on public.review_documents (release_id, status);
 create index claims_summary_run_idx on public.claims (summary_run_id, claim_order);
-create index coverage_requests_queue_idx on public.coverage_requests (status, requested_at);
 
 alter table public.artists enable row level security;
 alter table public.releases enable row level security;
@@ -126,7 +116,6 @@ alter table public.review_excerpts enable row level security;
 alter table public.summary_runs enable row level security;
 alter table public.claims enable row level security;
 alter table public.claim_sources enable row level security;
-alter table public.coverage_requests enable row level security;
 
 create policy "published releases are public" on public.releases for select
   to anon, authenticated using (
@@ -184,5 +173,4 @@ create policy "citations from published runs are public" on public.claim_sources
     )
   );
 
--- provider_identifiers, source_policies, and coverage_requests stay server-only.
--- The API may enqueue a coverage request with the service role after applying rate limits.
+-- provider_identifiers and source_policies stay server-only.

@@ -1,5 +1,6 @@
 .next/
 .vite/
+.claude/
 node_modules/
 out/
 pnpm-lock.yaml

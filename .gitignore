@@ -19,3 +19,6 @@ __pycache__/
 apps/desktop/.vite/
 apps/desktop/out/
 ingest/.venv/
+
+# Agent / skill process artifacts (plans, specs, scratch)
+docs/superpowers/
