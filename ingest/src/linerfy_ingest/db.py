@@ -67,12 +67,14 @@ def reset(conn: psycopg.Connection) -> None:
 
     Refuses to run unless the target is a local database or has been explicitly
     marked as a test database, so the default command can never destroy tables.
+    For a remote test database, set LINERFY_RESET_ALLOWED=1 inline on the reset
+    command only -- do not persist it.
     """
     host = conn.info.host or ""
     if not _reset_permitted(host):
         raise RuntimeError(
             "refusing to reset: target host is not a marked local/test database; "
-            "set LINERFY_RESET_ALLOWED=1 only for known test databases"
+            "set LINERFY_RESET_ALLOWED=1 inline for this one command only"
         )
     for table in _DROP_ORDER:
         conn.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
