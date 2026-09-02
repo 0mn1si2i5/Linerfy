@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from .adapter import FixtureSourceAdapter
+from .admin import list_jobs, purge_expired, retry_failed, set_pause
 from .budget import BudgetGuard
 from .db import (
     apply_migration,
@@ -56,6 +57,10 @@ modes:
   --guardian <article-path>    fetch one review from The Guardian's Content API
   --summarize <release-slug>   summarize a release's published bodies into Chinese claims
   --run-enrichment             run one enrichment worker tick (claim + advance one job)
+  --pause / --resume           set / clear the global model-generation pause
+  --jobs                       list the enrichment queue
+  --retry-failed               re-queue failed jobs (reset retry count)
+  --purge                      delete private bodies past their retention window
   --prepare-test-db            migrate and mark the target as the dedicated test DB
   --help                       show this help
 
@@ -64,6 +69,7 @@ examples:
   python -m linerfy_ingest --guardian music/2019/aug/30/lana-del-rey-norman-fucking-rockwell-review
   python -m linerfy_ingest --summarize norman-fucking-rockwell
   python -m linerfy_ingest --run-enrichment
+  python -m linerfy_ingest --pause
 """
 
 
@@ -105,6 +111,38 @@ def _run_enrichment() -> None:
         processed = run_once(PostgresJobStore(conn), _STAGE_HANDLERS)
         conn.commit()
     print(f"enrichment tick: processed {processed} job(s)")
+
+
+def _run_pause(paused: bool) -> None:
+    with connect() as conn:
+        set_pause(conn, paused)
+    print(f"model generation {'paused' if paused else 'resumed'}")
+
+
+def _run_jobs() -> None:
+    with connect() as conn:
+        jobs = list_jobs(conn)
+    if not jobs:
+        print("no enrichment jobs")
+        return
+    for job in jobs:
+        error = f" ({job['last_error']})" if job["last_error"] else ""
+        print(
+            f"{job['entity_id']}\t{job['stage']}\t{job['state']}"
+            f"\tretries={job['retry_count']}{error}"
+        )
+
+
+def _run_retry_failed() -> None:
+    with connect() as conn:
+        count = retry_failed(conn)
+    print(f"re-queued {count} failed job(s)")
+
+
+def _run_purge() -> None:
+    with connect() as conn:
+        count = purge_expired(conn)
+    print(f"purged {count} expired private body/bodies")
 
 
 def _resolve_model() -> ChatProvider:
@@ -187,6 +225,16 @@ def main() -> None:
         _run_summarize(args[index + 1])
     elif "--run-enrichment" in args:
         _run_enrichment()
+    elif "--pause" in args:
+        _run_pause(True)
+    elif "--resume" in args:
+        _run_pause(False)
+    elif "--jobs" in args:
+        _run_jobs()
+    elif "--retry-failed" in args:
+        _run_retry_failed()
+    elif "--purge" in args:
+        _run_purge()
     else:
         print(_HELP)
         raise SystemExit(2)
