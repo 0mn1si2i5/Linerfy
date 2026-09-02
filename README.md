@@ -1,34 +1,43 @@
 # Linerfy
 
-> 在不打断听歌的前提下，提供可信、可追溯的音乐评论语境。
+> 依附于正在播放的音乐的 macOS 乐评 companion。不打断听歌，只在你想了解时出现。
 >
-> Source-backed music criticism without interrupting the listening flow.
+> A macOS music-criticism companion that sits next to what is playing. It never interrupts listening; it surfaces context only when you want it.
 
-Linerfy 聚合专家与社区乐评、Genre 标签和有来源依据的中文总结。它不替代 Spotify 或 Apple Music，也不让模型脱离原文自行评价音乐。
+Linerfy 在你用 Spotify 或 Apple Music 听歌时识别当前曲目，并在一个轻量的菜单栏窗口里展示曲风、相关标签、来源评分、单来源中文总结、跨来源综合观点和原文链接。只有你想深入了解时才离开 Linerfy 前往原始来源。
 
-Linerfy brings together professional and community criticism, genre labels, and source-backed Chinese summaries. It complements Spotify and Apple Music instead of replacing them, and never treats model output as an independent source of truth.
+Linerfy identifies the current track while you listen on Spotify or Apple Music, and shows genres, tags, source ratings, per-source Chinese summaries, cross-source consensus, and original links in a lightweight menu-bar window. You leave Linerfy for the original source only when you want to go deeper.
 
-当前版本是用于验证核心体验的非商业脚手架：Web 是优先公开形态，Electron 是可手动分享给朋友的 macOS preview。项目目的与架构的中文说明见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。
+v1 不建设搜索、内容首页、推荐、收藏、社交、评论、播放历史或独立音乐浏览体验。
 
-The current version is a non-commercial validation scaffold: the web is the primary public surface, while Electron provides a manually shared macOS friends preview. See the linked Chinese document for the product and architecture overview.
+v1 ships no search, content home, recommendations, favorites, social features, comments, play history, or standalone music browsing.
 
-## 当前包含 / What is included
+## 形态 / Shape
 
-- Next.js Web 应用，可部署到 Vercel Hobby。A Next.js web app suitable for Vercel Hobby.
-- 安全隔离的 Electron macOS preview，通过固定本地程序读取 Spotify 或 Apple Music 当前播放。A sandboxed Electron preview using fixed local programs for now-playing metadata.
-- 共享的公开领域契约、UI 和 now-playing packages。Shared public domain, UI, and now-playing packages.
-- Python 采集与总结：The Guardian 官方 API adapter、可追溯中文总结（DeepSeek）、来源策略与摘录限制。Python ingestion and summarization: a Guardian Content API adapter, traceable Chinese summaries (DeepSeek), source policy, and excerpt limits.
-- Supabase 初始 schema，只公开已发布内容。A Supabase schema exposing published content only.
+- **macOS companion**（`apps/desktop`）：菜单栏 popover 与全局快捷键打开，读取当前播放并展示语境。当前已是普通窗口 + 播放识别；菜单栏/快捷键/窗口状态为计划中。
+- **Vercel API**（`apps/web`）：已认证 API、GitHub OAuth 回调、最小登录/结果页，以及开发/管理 smoke 页面。它不再是面向用户的音乐浏览站；`/context/[slug]` 仅作开发/管理 smoke 保留。
+- **采集**（`ingest`）：实体匹配、许可来源、模型总结的批处理管线。
+- **存储**（`supabase/migrations`）：catalog、enrichment jobs 与行级权限。
 
-## 真实内容链路 / The real content chain
+## 正式数据来源 / Authorized sources
 
-第一条真实链路已打通：Guardian 官方 API 抓取一篇乐评 → 正文私有入库（`review_document_bodies`，匿名不可读）→ DeepSeek 生成带引用的中文总结 → Supabase → Web 服务端读取并展示。
+v1 默认启用的来源仅包括：MusicBrainz、Wikidata、CritiqueBrainz、Wikipedia（仅 MediaWiki API 的 Reception / Critical reception 内容）。
 
-The first real chain works end to end: the Guardian Content API fetches a review → the full body is stored privately (`review_document_bodies`, unreadable by anon) → DeepSeek produces a source-citing Chinese summary → Supabase → the web reads and renders it.
+The only v1 sources are MusicBrainz, Wikidata, CritiqueBrainz, and Wikipedia (Reception via the MediaWiki API).
 
-尚未打通的部分：Pitchfork 仍是手写 fixture（无真实抓取）；社区语料尚未接入；Web 当前只展示第一条 claim 作为「中文共识」。正文的 30 天保留策略已记录在 source policy 中，但尚未自动执行。
+Guardian、Pitchfork、Album of the Year、Metacritic、Rate Your Music、Reddit 等没有适当自动化授权或许可不清晰的来源不属于正式 v1：不开发绕过限制的抓取器；旧 Guardian adapter 仅作参考保留并默认关闭，不进入生产流水线。
 
-Not yet connected: Pitchfork is still a hand-written fixture (no real fetch); community sources are not yet wired; the web currently renders only the first claim as the "consensus". The 30-day body-retention policy is recorded in source policy but is not yet enforced automatically.
+Guardian, Pitchfork, AOTY, Metacritic, RYM, Reddit, and other unlicensed or unauthorized sources are not part of v1: no bypass scrapers, and the legacy Guardian adapter is kept reference-only and disabled by default.
+
+## 认证与隐私 / Auth & privacy
+
+- 登录使用 Supabase Auth 的 GitHub OAuth，并以 GitHub 数字用户 ID 校验 Vercel 环境变量白名单。
+- catalog 与内容 API 仅允许已登录且在白名单内的用户访问；取消匿名 Supabase catalog 读取。
+- macOS 登录完成后把 session/refresh token 存入 Keychain；renderer 只得到最小登录状态，不接触长期令牌或服务端密钥。
+- service-role、来源 API key、模型 key 只存在于服务端或 ingestion/worker 环境。
+- 不保存连续播放历史；日志只记录任务 ID、阶段、耗时、provider、token usage、错误分类和时间，不含全文、prompt、密钥或播放历史。
+
+Auth uses Supabase Auth GitHub OAuth, gated by a numeric GitHub ID whitelist in Vercel env. Catalog and content APIs are available only to logged-in, whitelisted users; anonymous catalog reads are removed. The macOS app stores session/refresh tokens in Keychain; the renderer only sees minimal login state. No continuous play history is kept, and logs never contain full text, prompts, secrets, or play history.
 
 ## 本地运行 / Local setup
 
@@ -36,18 +45,13 @@ Not yet connected: Pitchfork is still a hand-written fixture (no real fetch); co
 
 ```bash
 pnpm install
-pnpm --filter @linerfy/web dev
+pnpm --filter @linerfy/desktop dev   # macOS companion
+pnpm --filter @linerfy/web dev       # API + OAuth + smoke
 ```
 
-在另一个终端启动 Electron preview / Start the Electron preview in another terminal:
+第一次读取 Spotify 或 Music 时，macOS 会请求 Automation 权限。应用只通过最小 preload bridge 接收当前曲目的元数据，播放器元数据始终视为不可信输入。
 
-```bash
-pnpm --filter @linerfy/desktop dev
-```
-
-第一次读取 Spotify 或 Music 时，macOS 会请求 Automation 权限。应用只通过最小 preload bridge 接收当前曲目的元数据。
-
-macOS requests Automation permission on first access. Only current-track metadata crosses the narrow preload bridge.
+macOS requests Automation permission on first access. Only current-track metadata crosses the narrow preload bridge; player metadata is always treated as untrusted input.
 
 ## 采集与总结命令 / Ingestion commands
 
@@ -56,39 +60,34 @@ macOS requests Automation permission on first access. Only current-track metadat
 ```bash
 cd ingest
 
-# 真实采集：抓取卫报一篇乐评并写入（正文私有）。需要 GUARDIAN_API_KEY。
-# Fetch one Guardian review (private body). Requires GUARDIAN_API_KEY.
-python -m linerfy_ingest --guardian <article-path>
-
-# 真实总结：读取已入库正文，调用 DeepSeek 生成可追溯总结，原子写入。
-# Summarize published bodies into traceable claims, written atomically. Requires MODEL_API_KEY.
+# 总结：读取已入库正文，调用模型生成可追溯总结，原子写入（模型网络调用在事务外）。
 python -m linerfy_ingest --summarize <release-slug>
 
 # fixture 仅用于本地/标记测试库，且只 insert-only、不覆盖已存在记录。
-# The fixture is test-only: it refuses remote databases and never overwrites.
 LINERFY_RESET_ALLOWED=1 python -m linerfy_ingest --fixture
+
+# 准备专用测试库：迁移并打标记（仅本地/标记库）。
+python -m linerfy_ingest --prepare-test-db
 ```
 
 ## 验证 / Verification
 
 ```bash
 pnpm check
-pnpm package:desktop
+pnpm --filter @linerfy/desktop package   # 生成本地 Electron 包
 cd ingest
 uv run ruff check .
 uv run pytest
 ```
 
-未签名 Electron 包输出到 `apps/desktop/out/`，仅用于与可信朋友手动分享。公开分发需要 Apple 签名与 notarization。
+未签名 Electron 包输出到 `apps/desktop/out/`，仅用于手动分享与边界验证。公开分发需要 Apple 签名与 notarization（v1 不实现）。
 
-The unsigned Electron package is written to `apps/desktop/out/` for manual sharing with trusted friends. Public distribution requires Apple signing and notarization.
+The unsigned Electron package is written to `apps/desktop/out/` for manual sharing and boundary verification. Public distribution requires Apple signing and notarization (not in v1).
 
-## 部署与范围 / Deployment boundary
+## 当前状态 / Status
 
-Web 是第一公开形态，个人验证阶段使用 Vercel Hobby 和 Supabase Free。`.env.example` 只列变量名（含 `GUARDIAN_API_KEY`、`MODEL_API_KEY`），真实值保存在本地或部署平台的 secrets 中。
+- **已实现**：Supabase catalog 与行级权限；可追溯中文总结（模型边界、原子发布）；DB 测试双重守卫与隔离实体；多 claim 展示。
+- **部分实现**：macOS 播放识别（普通窗口，菜单栏/快捷键/窗口状态待做）。
+- **计划中**：GitHub OAuth 与认证边界；MusicBrainz/Wikidata/CritiqueBrainz/Wikipedia 适配器；enrichment jobs；模型 provider 抽象；管理 CLI。
 
-The web is the first public surface, targeting Vercel Hobby and Supabase Free during personal validation. `.env.example` lists names only (including `GUARDIAN_API_KEY` and `MODEL_API_KEY`); real values stay in local or deployment secrets.
-
-内容边界：采集端可私有保存全文用于生成总结，但公开网页/桌面端只展示 AI 总结、有限摘录、元数据与原文链接；全文不进入公开接口、前端或仓库。定时采集、认证和补全请求队列仍不属于当前脚手架，随真实产品链路逐步加入。
-
-Content boundary: the ingestion side may hold full text privately to produce summaries, but the public web/desktop surface shows only AI summaries, short excerpts, metadata, and original links; full text never reaches a public interface, frontend, or repository. Scheduled ingestion, authentication, and a coverage-request queue remain outside the scaffold.
+细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。
