@@ -26,6 +26,7 @@ _TABLE_ORDER = [
     "review_sources",
     "source_policies",
     "review_documents",
+    "review_document_bodies",
     "review_excerpts",
     "genre_sources",
     "summary_runs",
@@ -40,6 +41,7 @@ _DROP_ORDER = [
     "summary_runs",
     "genre_sources",
     "review_excerpts",
+    "review_document_bodies",
     "review_documents",
     "genres",
     "source_policies",
@@ -49,6 +51,24 @@ _DROP_ORDER = [
     "releases",
     "artists",
 ]
+
+# Primary key columns per table, so a seed can upsert deterministically: the
+# same canonical slug always maps to the same row, and re-seeding with real data
+# replaces an earlier hand-authored placeholder instead of leaving it behind.
+_PRIMARY_KEYS = {
+    "artists": ["id"],
+    "releases": ["id"],
+    "genres": ["id"],
+    "review_sources": ["id"],
+    "source_policies": ["source_id"],
+    "review_documents": ["id"],
+    "review_document_bodies": ["document_id"],
+    "review_excerpts": ["id"],
+    "genre_sources": ["genre_id", "document_id"],
+    "summary_runs": ["id"],
+    "claims": ["id"],
+    "claim_sources": ["claim_id", "document_id"],
+}
 
 
 def connect() -> psycopg.Connection:
@@ -99,22 +119,31 @@ def _db_value(name: str, value: object) -> object:
 
 def seed(conn: psycopg.Connection, context: IngestedContext) -> int:
     rows = to_rows(context)
-    inserted = 0
+    written = 0
     for table in _TABLE_ORDER:
         table_rows = rows[table]
         if not table_rows:
             continue
         columns = list(table_rows[0].keys())
         placeholders = ", ".join(["%s"] * len(columns))
+        primary_keys = _PRIMARY_KEYS[table]
+        update_columns = [column for column in columns if column not in primary_keys]
+        if update_columns:
+            on_conflict = (
+                f"ON CONFLICT ({', '.join(primary_keys)}) DO UPDATE SET "
+                + ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns)
+            )
+        else:
+            on_conflict = "ON CONFLICT DO NOTHING"
         statement = (
             f"INSERT INTO public.{table} ({', '.join(columns)}) "
-            f"VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+            f"VALUES ({placeholders}) {on_conflict}"
         )
         for row in table_rows:
             values = [_db_value(column, row[column]) for column in columns]
             cursor = conn.execute(statement, values)
-            inserted += cursor.rowcount
-    return inserted
+            written += cursor.rowcount
+    return written
 
 
 def verify() -> dict:
@@ -137,5 +166,11 @@ def verify() -> dict:
         report["anon_source_policies"] = conn.execute(
             "SELECT count(*) FROM public.source_policies"
         ).fetchone()[0]
+        try:
+            report["anon_review_document_bodies"] = conn.execute(
+                "SELECT count(*) FROM public.review_document_bodies"
+            ).fetchone()[0]
+        except psycopg.errors.InsufficientPrivilege:
+            report["anon_review_document_bodies"] = "denied"
         conn.execute("RESET ROLE")
     return report

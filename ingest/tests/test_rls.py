@@ -12,6 +12,7 @@ import os
 import uuid
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from linerfy_ingest.adapter import FixtureSourceAdapter
@@ -179,6 +180,13 @@ def test_anon_cannot_read_a_draft_citation(rls_ids) -> None:
         )
         == 0
     )
+
+
+def test_anon_cannot_read_a_review_body(rls_ids) -> None:
+    with connect() as conn:
+        conn.execute("SET ROLE anon")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT count(*) FROM public.review_document_bodies")
 
 
 def test_anon_cannot_read_a_cross_release_citation(rls_ids) -> None:

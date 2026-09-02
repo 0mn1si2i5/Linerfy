@@ -28,6 +28,7 @@ def _fingerprint(document: ReviewDocument) -> str:
         document.author or "",
         document.published_at.isoformat() if document.published_at else "",
         document.public_excerpt,
+        document.content or "",
     ]
     return hashlib.sha256("\n".join(fields).encode("utf-8")).hexdigest()
 
@@ -132,39 +133,49 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
         for document in context.review_documents
     ]
 
-    summary_run_id = stable_uuid("summary", context.release.id)
-    summary_runs = [
+    review_document_bodies = [
         {
-            "id": summary_run_id,
-            "release_id": release_id,
-            "model": context.summary.model,
-            "prompt_version": context.summary.prompt_version,
-            "locale": context.summary.locale,
-            "corpus_hash": context.summary.corpus_hash,
-            "generated_at": context.summary.generated_at.isoformat(),
-            "status": "published",
+            "document_id": document_uuid[document.id],
+            "content": document.content,
         }
+        for document in context.review_documents
+        if document.content
     ]
 
+    summary_runs = []
     claims = []
     claim_sources = []
-    for order, claim in enumerate(context.summary.claims):
-        claim_id = stable_uuid("claim", f"{context.release.id}:{order}")
-        claims.append(
+    if context.summary is not None:
+        summary_run_id = stable_uuid("summary", context.release.id)
+        summary_runs = [
             {
-                "id": claim_id,
-                "summary_run_id": summary_run_id,
-                "claim_order": order,
-                "claim_text": claim.text,
+                "id": summary_run_id,
+                "release_id": release_id,
+                "model": context.summary.model,
+                "prompt_version": context.summary.prompt_version,
+                "locale": context.summary.locale,
+                "corpus_hash": context.summary.corpus_hash,
+                "generated_at": context.summary.generated_at.isoformat(),
+                "status": "published",
             }
-        )
-        claim_sources.extend(
-            {
-                "claim_id": claim_id,
-                "document_id": document_uuid[source_id],
-            }
-            for source_id in claim.source_ids
-        )
+        ]
+        for order, claim in enumerate(context.summary.claims):
+            claim_id = stable_uuid("claim", f"{context.release.id}:{order}")
+            claims.append(
+                {
+                    "id": claim_id,
+                    "summary_run_id": summary_run_id,
+                    "claim_order": order,
+                    "claim_text": claim.text,
+                }
+            )
+            claim_sources.extend(
+                {
+                    "claim_id": claim_id,
+                    "document_id": document_uuid[source_id],
+                }
+                for source_id in claim.source_ids
+            )
 
     genre_uuid = {
         genre.name: stable_uuid("genre", f"{context.release.id}:{genre.name}")
@@ -194,6 +205,7 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
         "review_sources": review_sources,
         "source_policies": source_policies,
         "review_documents": review_documents,
+        "review_document_bodies": review_document_bodies,
         "review_excerpts": review_excerpts,
         "genre_sources": genre_sources,
         "summary_runs": summary_runs,

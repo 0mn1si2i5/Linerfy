@@ -59,6 +59,7 @@ class ReviewDocument(BaseModel):
     score: float | None = Field(default=None, ge=0)
     score_scale: int | None = Field(default=None, gt=0)
     public_excerpt: str = Field(min_length=1)
+    content: str | None = None
     policy: SourcePolicy
 
     @model_validator(mode="after")
@@ -109,7 +110,7 @@ class IngestedContext(BaseModel):
     sources: list[ReviewSource]
     review_documents: list[ReviewDocument]
     genres: list[Genre] = Field(default_factory=list)
-    summary: Summary
+    summary: Summary | None = None
 
     @model_validator(mode="after")
     def check_consistency(self) -> "IngestedContext":
@@ -149,6 +150,8 @@ class IngestedContext(BaseModel):
             raise ValueError(f"references unknown sources: {sorted(unknown)}")
 
     def _check_claim_provenance(self) -> None:
+        if self.summary is None:
+            return
         document_ids = {document.id for document in self.review_documents}
         missing = {
             source_id

@@ -17,6 +17,7 @@ def test_emits_every_catalog_table() -> None:
         "review_sources",
         "source_policies",
         "review_documents",
+        "review_document_bodies",
         "review_excerpts",
         "genre_sources",
         "summary_runs",
@@ -59,6 +60,9 @@ def test_foreign_keys_resolve_across_tables() -> None:
     assert all(row["summary_run_id"] in summary_ids for row in r["claims"])
     assert all(row["claim_id"] in claim_ids for row in r["claim_sources"])
     assert all(row["document_id"] in document_ids for row in r["claim_sources"])
+    assert all(
+        row["document_id"] in document_ids for row in r["review_document_bodies"]
+    )
 
 
 def test_one_policy_per_source() -> None:
