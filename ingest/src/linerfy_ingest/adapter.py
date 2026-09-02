@@ -1,9 +1,7 @@
 import json
 from pathlib import Path
 
-from pydantic import TypeAdapter
-
-from .models import ReviewDocument
+from .models import IngestedContext
 
 
 class FixtureSourceAdapter:
@@ -12,6 +10,6 @@ class FixtureSourceAdapter:
     def __init__(self, fixture_path: Path) -> None:
         self.fixture_path = fixture_path
 
-    def fetch(self) -> list[ReviewDocument]:
+    def fetch(self) -> IngestedContext:
         payload = json.loads(self.fixture_path.read_text(encoding="utf-8"))
-        return TypeAdapter(list[ReviewDocument]).validate_python(payload)
+        return IngestedContext.model_validate(payload)

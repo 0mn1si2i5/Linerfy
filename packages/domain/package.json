@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./fixtures": "./src/fixtures.ts"
+    "./fixtures": "./src/fixtures.ts",
+    "./from-catalog": "./src/from-catalog.ts"
   },
   "scripts": {
     "test": "vitest run",

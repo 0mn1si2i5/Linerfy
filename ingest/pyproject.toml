@@ -3,7 +3,10 @@ name = "linerfy-ingest"
 version = "0.0.0"
 description = "Provenance-preserving ingestion contracts for Linerfy"
 requires-python = ">=3.12,<3.13"
-dependencies = ["pydantic>=2.12,<3"]
+dependencies = [
+    "psycopg[binary]>=3.3.5",
+    "pydantic>=2.12,<3",
+]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "ruff>=0.14,<1"]
@@ -17,6 +20,7 @@ packages = ["src/linerfy_ingest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
