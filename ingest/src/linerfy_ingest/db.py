@@ -118,6 +118,50 @@ def apply_migration(conn: psycopg.Connection) -> None:
         conn.execute(path.read_text(encoding="utf-8"))
 
 
+# The dedicated test database is identified by this marker table, which only the
+# prep step creates. The production catalog never has it, so an integration test
+# can prove it is talking to a throwaway test database instead of real data.
+_TEST_MARKER_TABLE = "_linerfy_test_marker"
+_TEST_MARKER_VALUE = "test-database"
+
+
+def is_test_db(conn: psycopg.Connection) -> bool:
+    """True when the connected database carries the dedicated-test marker."""
+    table = conn.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = %s",
+        (_TEST_MARKER_TABLE,),
+    ).fetchone()
+    if not table:
+        return False
+    return (
+        conn.execute(
+            f"SELECT 1 FROM public.{_TEST_MARKER_TABLE} WHERE marker = %s",
+            (_TEST_MARKER_VALUE,),
+        ).fetchone()
+        is not None
+    )
+
+
+def prepare_test_db(conn: psycopg.Connection) -> None:
+    """Prepare a dedicated test database: apply the catalog migration and mark it.
+
+    Run this once, manually, against a throwaway/test database -- never against
+    the production catalog (guarded the same way as ``reset``).
+    """
+    require_test_db(conn)
+    apply_migration(conn)
+    conn.execute(
+        f"CREATE TABLE IF NOT EXISTS public.{_TEST_MARKER_TABLE} "
+        "(marker text primary key)"
+    )
+    conn.execute(
+        f"INSERT INTO public.{_TEST_MARKER_TABLE} (marker) VALUES (%s) "
+        "ON CONFLICT (marker) DO NOTHING",
+        (_TEST_MARKER_VALUE,),
+    )
+
+
 def _is_uuid_column(name: str) -> bool:
     return name == "id" or name.endswith("_id")
 

@@ -1,10 +1,9 @@
-"""Database integration tests for summary atomicity and fixture isolation.
+"""Database integration tests for summary atomicity and insert-only seeding.
 
-Opt-in (``DATABASE_URL``). The atomicity test uses uniquely-named test entities
-created with the same ``stable_uuid`` scheme as production, so ``write_summary``
-resolves their ids exactly as it does in real life; it cleans up afterwards. The
-fixture test runs the real fixture against the real catalog and proves it changes
-nothing.
+Opt-in and gated: they run only when both ``DATABASE_URL`` and
+``LINERFY_DB_TESTS_ALLOWED=1`` are set, and then only against a database marked
+with ``prepare_test_db``. Every entity is uniquely named and cleaned up, so a
+real release such as Norman Fucking Rockwell! is never read or written.
 """
 
 from __future__ import annotations
@@ -12,24 +11,32 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
 import psycopg
 import pytest
-from _db_helpers import cleanup
+from _db_helpers import cleanup, skip_unless_test_db
 
-from linerfy_ingest.adapter import FixtureSourceAdapter
-from linerfy_ingest.db import apply_migration, connect, seed
-from linerfy_ingest.models import CitedClaim, Summary
+from linerfy_ingest.db import connect, seed
+from linerfy_ingest.models import (
+    ArtistEntity,
+    CitedClaim,
+    IngestedContext,
+    ReleaseEntity,
+    ReviewDocument,
+    ReviewSource,
+    SourcePolicy,
+    Summary,
+)
 from linerfy_ingest.seed import stable_uuid
 from linerfy_ingest.summarize import write_summary
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL not set; DB integration tests are opt-in",
+    not (
+        os.environ.get("DATABASE_URL")
+        and os.environ.get("LINERFY_DB_TESTS_ALLOWED") == "1"
+    ),
+    reason="set DATABASE_URL and LINERFY_DB_TESTS_ALLOWED=1 to run DB integration tests",
 )
-
-_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "reviews.json"
 
 
 def _sid(kind: str, slug: str) -> uuid.UUID:
@@ -88,7 +95,7 @@ def _insert_atomic_catalog(conn) -> dict:
 
 def test_write_summary_is_atomic_on_failure() -> None:
     with connect() as conn:
-        apply_migration(conn)
+        skip_unless_test_db(conn)
         ids = _insert_atomic_catalog(conn)
 
     good = _summary(
@@ -131,41 +138,89 @@ def test_write_summary_is_atomic_on_failure() -> None:
             cleanup(conn, artist_id=ids["artist"], source_id=ids["source"])
 
 
-def _nfr_snapshot(conn):
-    release_id = conn.execute(
-        "SELECT id FROM public.releases WHERE slug = %s", ("norman-fucking-rockwell",)
-    ).fetchone()
-    if release_id is None:
-        return None
-    release_id = release_id[0]
-    guardian_title = conn.execute(
-        "SELECT title FROM public.review_documents WHERE slug = %s", ("guardian-nfr",)
-    ).fetchone()
-    summary = conn.execute(
-        "SELECT corpus_hash, model FROM public.summary_runs WHERE release_id = %s",
-        (release_id,),
-    ).fetchone()
-    claims = conn.execute(
-        "SELECT count(*) FROM public.claims c "
-        "JOIN public.summary_runs s ON s.id = c.summary_run_id WHERE s.release_id = %s",
-        (release_id,),
-    ).fetchone()[0]
-    sources = conn.execute(
-        "SELECT count(*) FROM public.claim_sources cs "
-        "JOIN public.claims c ON c.id = cs.claim_id "
-        "JOIN public.summary_runs s ON s.id = c.summary_run_id WHERE s.release_id = %s",
-        (release_id,),
-    ).fetchone()[0]
-    return (guardian_title, summary, claims, sources)
+# --- insert-only seeding (the fixture no-overwrite guarantee, made synthetic) ---
 
 
-def test_fixture_seed_does_not_change_existing_records() -> None:
+def _synthetic_context(title: str, claim_text: str) -> IngestedContext:
+    artist = ArtistEntity(id="synthetic-artist", name="Synthetic Artist")
+    release = ReleaseEntity(
+        id="synthetic-release", title=title, artist_id=artist.id, year=2000
+    )
+    source = ReviewSource(
+        id="synthetic-source",
+        publication="Synthetic Source",
+        homepage_url="https://example.com/synthetic",
+    )
+    policy = SourcePolicy(
+        source_id=source.id,
+        crawl_allowed=True,
+        requests_per_minute=10,
+        retention_days=30,
+        excerpt_max_chars=280,
+        attribution_required=True,
+        removal_contact="rights@example.com",
+    )
+    document = ReviewDocument(
+        id="synthetic-doc",
+        release_id=release.id,
+        source_id=source.id,
+        source_url="https://example.com/synthetic/doc",
+        title=title,
+        author=None,
+        published_at=None,
+        score=None,
+        score_scale=None,
+        public_excerpt="A synthetic excerpt.",
+        content=None,
+        policy=policy,
+    )
+    summary = Summary(
+        locale="zh-CN",
+        model="synthetic-model",
+        prompt_version="synthetic-v1",
+        generated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        corpus_hash="synthetic-corpus",
+        claims=[CitedClaim(text=claim_text, source_ids=["synthetic-doc"])],
+    )
+    return IngestedContext(
+        release=release,
+        artist=artist,
+        sources=[source],
+        review_documents=[document],
+        genres=[],
+        summary=summary,
+    )
+
+
+def test_insert_only_seed_does_not_overwrite_existing_records() -> None:
+    first = _synthetic_context("Synthetic Release v1", "claim v1")
+    second = _synthetic_context("Synthetic Release v2", "claim v2")
+
+    artist_id = _sid("artist", "synthetic-artist")
+    source_id = _sid("source", "synthetic-source")
+    release_id = _sid("release", "synthetic-release")
+
     with connect() as conn:
-        before = _nfr_snapshot(conn)
-        if before is None:
-            pytest.skip("NFR release not present; cannot exercise fixture no-overwrite")
-        written = seed(conn, FixtureSourceAdapter(_FIXTURE).fetch(), overwrite=False)
-        after = _nfr_snapshot(conn)
+        skip_unless_test_db(conn)
 
-    assert written == 0
-    assert after == before
+        # First seed populates the synthetic release (release absent).
+        seed(conn, first, overwrite=False)
+
+        # A second insert-only seed of the same release must write nothing.
+        written = seed(conn, second, overwrite=False)
+        assert written == 0
+
+        title = conn.execute(
+            "SELECT title FROM public.releases WHERE id = %s", (release_id,)
+        ).fetchone()[0]
+        assert title == "Synthetic Release v1"
+
+        claim_text = conn.execute(
+            "SELECT claim_text FROM public.claims WHERE summary_run_id = %s "
+            "ORDER BY claim_order",
+            (_sid("summary", "synthetic-release"),),
+        ).fetchone()[0]
+        assert claim_text == "claim v1"
+
+    with connect() as conn:
+        cleanup(conn, artist_id=artist_id, source_id=source_id)

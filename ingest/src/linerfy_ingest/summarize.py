@@ -7,10 +7,10 @@ them. Only the corpus text is ever read here; the full text is never public.
 
 The model is treated strictly as a compressor of untrusted material: the corpus
 is wrapped in delimited, "analysis-only" markers and the hard rules live in the
-system message, so an instruction smuggled inside a review body is never executed.
-A response is persisted only if it is complete (``finish_reason == "stop"``) and
-passes every structural check (3-5 claims, bounded text, sources that all belong
-to the corpus).
+system message, which lowers the risk that an instruction smuggled inside a
+review body is followed. A response is persisted only if it is complete
+(``finish_reason == "stop"``) and passes every structural check (3-5 claims,
+bounded text, sources that all belong to the corpus).
 """
 
 from __future__ import annotations

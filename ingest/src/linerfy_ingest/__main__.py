@@ -16,6 +16,9 @@ Modes
     summary (requires ``MODEL_API_KEY``). The model call happens outside any
     transaction; the write is one atomic transaction, so a failure leaves the
     previous published summary untouched.
+``--prepare-test-db``
+    Apply the catalog migration to the target and mark it as the dedicated test
+    database. Run once against a throwaway/test database, never production.
 """
 
 from __future__ import annotations
@@ -25,7 +28,15 @@ import sys
 from pathlib import Path
 
 from .adapter import FixtureSourceAdapter
-from .db import apply_migration, connect, require_test_db, reset, seed, verify
+from .db import (
+    apply_migration,
+    connect,
+    prepare_test_db,
+    require_test_db,
+    reset,
+    seed,
+    verify,
+)
 from .guardian import GuardianAdapter, build_context
 from .summarize import read_corpus, summarize, write_summary
 
@@ -37,6 +48,7 @@ modes:
   --fixture [--reset]          load the offline fixture (insert-only, never overwrites)
   --guardian <article-path>    fetch one review from The Guardian's Content API
   --summarize <release-slug>   summarize a release's published bodies into Chinese claims
+  --prepare-test-db            migrate and mark the target as the dedicated test DB
   --help                       show this help
 
 examples:
@@ -72,6 +84,12 @@ def _run_guardian(article_path: str) -> None:
     print(verify())
 
 
+def _run_prepare_test_db() -> None:
+    with connect() as conn:
+        prepare_test_db(conn)
+    print("prepared test database: applied migration and marked it")
+
+
 def _run_summarize(release_slug: str) -> None:
     with connect() as conn:
         corpus = read_corpus(conn, release_slug)
@@ -101,6 +119,8 @@ def main() -> None:
 
     if "--fixture" in args:
         _run_fixture()
+    elif "--prepare-test-db" in args:
+        _run_prepare_test_db()
     elif "--guardian" in args:
         index = args.index("--guardian")
         if index + 1 >= len(args):

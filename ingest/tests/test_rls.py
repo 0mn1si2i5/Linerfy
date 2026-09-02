@@ -12,13 +12,16 @@ import os
 
 import psycopg
 import pytest
-from _db_helpers import cleanup, tid
+from _db_helpers import cleanup, skip_unless_test_db, tid
 
-from linerfy_ingest.db import apply_migration, connect
+from linerfy_ingest.db import connect
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL not set; DB integration tests are opt-in",
+    not (
+        os.environ.get("DATABASE_URL")
+        and os.environ.get("LINERFY_DB_TESTS_ALLOWED") == "1"
+    ),
+    reason="set DATABASE_URL and LINERFY_DB_TESTS_ALLOWED=1 to run DB integration tests",
 )
 
 
@@ -50,7 +53,7 @@ def rls_ids():
     }
 
     with connect() as conn:
-        apply_migration(conn)
+        skip_unless_test_db(conn)
 
         conn.execute(
             "INSERT INTO public.artists (id, slug, name) VALUES (%s,%s,%s)",
