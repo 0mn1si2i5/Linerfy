@@ -3,12 +3,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { FeaturedContextResult } from "../lib/catalog";
+import type { ContextResult } from "../lib/catalog";
 import { HomePage } from "./home-page";
 
 describe("Linerfy home page", () => {
   it("renders criticism with a route back to every source", () => {
-    const result: FeaturedContextResult = {
+    const result: ContextResult = {
       status: "ok",
       context: featuredContext,
     };
@@ -19,10 +19,12 @@ describe("Linerfy home page", () => {
     expect(html).toContain("只在你想知道时出现");
     expect(html).toContain("查看原文");
     expect(html).toContain("Pitchfork");
+    expect(html).toContain("查看完整语境");
+    expect(html).toContain('href="/context/norman-fucking-rockwell"');
   });
 
   it("shows an explicit missing-coverage state when the release is not found", () => {
-    const result: FeaturedContextResult = { status: "not-found" };
+    const result: ContextResult = { status: "not-found" };
     const html = renderToStaticMarkup(createElement(HomePage, { result }));
 
     expect(html).toContain("这张专辑还没有被覆盖");
@@ -30,7 +32,7 @@ describe("Linerfy home page", () => {
   });
 
   it("does not render a query failure as missing coverage", () => {
-    const result: FeaturedContextResult = {
+    const result: ContextResult = {
       status: "query-failed",
       message: "connection refused",
     };
@@ -41,7 +43,7 @@ describe("Linerfy home page", () => {
   });
 
   it("does not render invalid catalog data as missing coverage", () => {
-    const result: FeaturedContextResult = {
+    const result: ContextResult = {
       status: "invalid",
       message: "catalog is missing an artist or release",
     };

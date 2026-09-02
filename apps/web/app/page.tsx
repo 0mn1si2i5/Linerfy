@@ -1,4 +1,4 @@
-import { getFeaturedContext } from "../lib/catalog";
+import { FEATURED_SLUG, getContextBySlug } from "../lib/catalog";
 
 import { HomePage } from "./home-page";
 
@@ -7,6 +7,6 @@ import { HomePage } from "./home-page";
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
-  const result = await getFeaturedContext();
+  const result = await getContextBySlug(FEATURED_SLUG);
   return <HomePage result={result} />;
 }

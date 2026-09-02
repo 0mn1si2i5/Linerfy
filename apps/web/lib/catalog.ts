@@ -7,15 +7,15 @@ import { createClient } from "@supabase/supabase-js";
 
 import { requireEnv } from "./env";
 
-const FEATURED_SLUG = "norman-fucking-rockwell";
+export const FEATURED_SLUG = "norman-fucking-rockwell";
 
 /**
- * The outcome of reading the featured album's context from Supabase.
+ * The outcome of reading a release's context from Supabase.
  *
  * `not-found` is a legitimate empty state ("this album isn't covered yet");
  * `query-failed` and `invalid` are failures that must never be shown as that.
  */
-export type FeaturedContextResult =
+export type ContextResult =
   | { status: "ok"; context: MusicContext }
   | { status: "not-found" }
   | { status: "query-failed"; message: string }
@@ -29,20 +29,20 @@ function createSupabase() {
 }
 
 /**
- * Read the featured album's normalized catalog rows from Supabase and reassemble
- * the public MusicContext. Runs only on the server; the anon key never reaches
- * the browser bundle.
+ * Read a release's normalized catalog rows from Supabase and reassemble the
+ * public MusicContext. Runs only on the server; the anon key never reaches the
+ * browser bundle.
  *
  * Every join-table query is scoped to this release's own ids, so a second
  * album's excerpts, genres, claims, or citations cannot leak into the result.
  */
-export async function getFeaturedContext(): Promise<FeaturedContextResult> {
+export async function getContextBySlug(slug: string): Promise<ContextResult> {
   const supabase = createSupabase();
 
   const { data: release, error: releaseError } = await supabase
     .from("releases")
     .select("*")
-    .eq("slug", FEATURED_SLUG)
+    .eq("slug", slug)
     .maybeSingle();
 
   if (releaseError) {
@@ -131,7 +131,7 @@ export async function getFeaturedContext(): Promise<FeaturedContextResult> {
   try {
     return { status: "ok", context: assembleMusicContext(catalog) };
   } catch (error) {
-    console.error("invalid featured context:", error);
+    console.error(`invalid context for slug "${slug}":`, error);
     return {
       status: "invalid",
       message: error instanceof Error ? error.message : String(error),
