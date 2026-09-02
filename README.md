@@ -86,8 +86,8 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 ## 当前状态 / Status
 
-- **已实现**：Supabase catalog 与行级权限（含认证边界迁移：取消匿名读取）；可追溯中文总结（模型边界、原子发布、多 provider：OpenAI 兼容 + Anthropic、预算守卫）；DB 测试双重守卫与隔离实体；多 claim 展示；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；macOS 菜单栏 companion（popover、全局快捷键、窗口状态、轮询与播放识别）。
+- **已实现**：Supabase catalog 与行级权限（认证边界迁移：取消匿名读取）；可追溯中文总结（多 provider：OpenAI 兼容 + Anthropic、预算守卫、原子发布）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器；enrichment jobs 队列与状态机（幂等、最多 2 次重试、超时、全局暂停）；管理 CLI（暂停/恢复、队列查看、失败重试、保留清理）；macOS 菜单栏 companion；实体→语料→总结闭环的集成验收。
 - **部分实现**：GitHub OAuth 认证（代码与迁移就绪；需在 Supabase 启用 GitHub provider、配置回调与白名单后生效）。
-- **计划中**：CritiqueBrainz/Wikipedia 语料适配器；enrichment jobs；管理 CLI；集成验收。
+- **待用户操作**：生产 Supabase 迁移、Vercel 部署、GitHub OAuth app/Supabase provider 配置、添加 git remote 并推送 `codex/linerfy-v1`。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。

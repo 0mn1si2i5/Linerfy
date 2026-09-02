@@ -2,17 +2,15 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 // Exchanges the OAuth authorization code for a session. This must run in the
 // browser: the PKCE code verifier lives in localStorage, set during sign-in.
-export const dynamic = "force-dynamic";
-
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const configured = Boolean(supabaseUrl && supabaseAnon);
 
-export default function AuthCallbackPage() {
+function Exchange() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const code = searchParams.get("code");
@@ -36,9 +34,15 @@ export default function AuthCallbackPage() {
     });
   }, [code, router]);
 
+  return <p>{message}</p>;
+}
+
+export default function AuthCallbackPage() {
   return (
     <main>
-      <p>{message}</p>
+      <Suspense fallback={<p>正在完成登录…</p>}>
+        <Exchange />
+      </Suspense>
     </main>
   );
 }
