@@ -7,6 +7,6 @@ import { HomePage } from "./home-page";
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
-  const context = await getFeaturedContext();
-  return <HomePage context={context} />;
+  const result = await getFeaturedContext();
+  return <HomePage result={result} />;
 }

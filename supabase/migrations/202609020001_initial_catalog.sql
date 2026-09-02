@@ -1,13 +1,13 @@
 create extension if not exists pgcrypto;
 
-create table public.artists (
+create table if not exists public.artists (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   sort_name text,
   created_at timestamptz not null default now()
 );
 
-create table public.releases (
+create table if not exists public.releases (
   id uuid primary key default gen_random_uuid(),
   artist_id uuid not null references public.artists(id) on delete cascade,
   title text not null,
@@ -16,7 +16,7 @@ create table public.releases (
   created_at timestamptz not null default now()
 );
 
-create table public.recordings (
+create table if not exists public.recordings (
   id uuid primary key default gen_random_uuid(),
   release_id uuid not null references public.releases(id) on delete cascade,
   title text not null,
@@ -25,7 +25,7 @@ create table public.recordings (
   created_at timestamptz not null default now()
 );
 
-create table public.provider_identifiers (
+create table if not exists public.provider_identifiers (
   id uuid primary key default gen_random_uuid(),
   entity_type text not null check (entity_type in ('artist', 'release', 'recording')),
   entity_id uuid not null,
@@ -36,7 +36,7 @@ create table public.provider_identifiers (
   unique (entity_type, entity_id, provider)
 );
 
-create table public.review_sources (
+create table if not exists public.review_sources (
   id uuid primary key default gen_random_uuid(),
   slug text not null unique,
   publication text not null,
@@ -44,7 +44,7 @@ create table public.review_sources (
   created_at timestamptz not null default now()
 );
 
-create table public.source_policies (
+create table if not exists public.source_policies (
   source_id uuid primary key references public.review_sources(id) on delete cascade,
   crawl_allowed boolean not null default false,
   requests_per_minute integer not null check (requests_per_minute > 0),
@@ -55,7 +55,7 @@ create table public.source_policies (
   reviewed_at timestamptz not null default now()
 );
 
-create table public.review_documents (
+create table if not exists public.review_documents (
   id uuid primary key default gen_random_uuid(),
   release_id uuid not null references public.releases(id) on delete cascade,
   source_id uuid not null references public.review_sources(id),
@@ -70,7 +70,7 @@ create table public.review_documents (
   status text not null default 'draft' check (status in ('draft', 'published', 'withdrawn'))
 );
 
-create table public.review_excerpts (
+create table if not exists public.review_excerpts (
   id uuid primary key default gen_random_uuid(),
   document_id uuid not null references public.review_documents(id) on delete cascade,
   excerpt text not null,
@@ -78,7 +78,7 @@ create table public.review_excerpts (
   created_at timestamptz not null default now()
 );
 
-create table public.summary_runs (
+create table if not exists public.summary_runs (
   id uuid primary key default gen_random_uuid(),
   release_id uuid not null references public.releases(id) on delete cascade,
   model text not null,
@@ -87,7 +87,7 @@ create table public.summary_runs (
   created_at timestamptz not null default now()
 );
 
-create table public.claims (
+create table if not exists public.claims (
   id uuid primary key default gen_random_uuid(),
   summary_run_id uuid not null references public.summary_runs(id) on delete cascade,
   claim_order integer not null check (claim_order >= 0),
@@ -95,15 +95,15 @@ create table public.claims (
   unique (summary_run_id, claim_order)
 );
 
-create table public.claim_sources (
+create table if not exists public.claim_sources (
   claim_id uuid not null references public.claims(id) on delete cascade,
   document_id uuid not null references public.review_documents(id) on delete cascade,
   primary key (claim_id, document_id)
 );
 
-create index review_documents_release_status_idx
+create index if not exists review_documents_release_status_idx
   on public.review_documents (release_id, status);
-create index claims_summary_run_idx on public.claims (summary_run_id, claim_order);
+create index if not exists claims_summary_run_idx on public.claims (summary_run_id, claim_order);
 
 alter table public.artists enable row level security;
 alter table public.releases enable row level security;
@@ -117,6 +117,7 @@ alter table public.summary_runs enable row level security;
 alter table public.claims enable row level security;
 alter table public.claim_sources enable row level security;
 
+drop policy if exists "published releases are public" on public.releases;
 create policy "published releases are public" on public.releases for select
   to anon, authenticated using (
     exists (
@@ -124,6 +125,7 @@ create policy "published releases are public" on public.releases for select
       where d.release_id = releases.id and d.status = 'published'
     )
   );
+drop policy if exists "artists with published releases are public" on public.artists;
 create policy "artists with published releases are public" on public.artists for select
   to anon, authenticated using (
     exists (
@@ -132,6 +134,7 @@ create policy "artists with published releases are public" on public.artists for
       where r.artist_id = artists.id and d.status = 'published'
     )
   );
+drop policy if exists "recordings on published releases are public" on public.recordings;
 create policy "recordings on published releases are public" on public.recordings for select
   to anon, authenticated using (
     exists (
@@ -139,8 +142,10 @@ create policy "recordings on published releases are public" on public.recordings
       where d.release_id = recordings.release_id and d.status = 'published'
     )
   );
+drop policy if exists "published review documents are public" on public.review_documents;
 create policy "published review documents are public" on public.review_documents for select
   to anon, authenticated using (status = 'published');
+drop policy if exists "sources for published documents are public" on public.review_sources;
 create policy "sources for published documents are public" on public.review_sources for select
   to anon, authenticated using (
     exists (
@@ -148,6 +153,7 @@ create policy "sources for published documents are public" on public.review_sour
       where d.source_id = review_sources.id and d.status = 'published'
     )
   );
+drop policy if exists "excerpts from published documents are public" on public.review_excerpts;
 create policy "excerpts from published documents are public" on public.review_excerpts for select
   to anon, authenticated using (
     exists (
@@ -155,8 +161,10 @@ create policy "excerpts from published documents are public" on public.review_ex
       where d.id = review_excerpts.document_id and d.status = 'published'
     )
   );
+drop policy if exists "published summary runs are public" on public.summary_runs;
 create policy "published summary runs are public" on public.summary_runs for select
   to anon, authenticated using (status = 'published');
+drop policy if exists "claims from published runs are public" on public.claims;
 create policy "claims from published runs are public" on public.claims for select
   to anon, authenticated using (
     exists (
@@ -164,12 +172,21 @@ create policy "claims from published runs are public" on public.claims for selec
       where s.id = claims.summary_run_id and s.status = 'published'
     )
   );
+drop policy if exists "citations from published runs are public" on public.claim_sources;
 create policy "citations from published runs are public" on public.claim_sources for select
   to anon, authenticated using (
     exists (
       select 1 from public.claims c
       join public.summary_runs s on s.id = c.summary_run_id
       where c.id = claim_sources.claim_id and s.status = 'published'
+    )
+    and exists (
+      select 1 from public.claims c
+      join public.summary_runs s on s.id = c.summary_run_id
+      join public.review_documents cited on cited.id = claim_sources.document_id
+      where c.id = claim_sources.claim_id
+        and cited.status = 'published'
+        and cited.release_id = s.release_id
     )
   );
 

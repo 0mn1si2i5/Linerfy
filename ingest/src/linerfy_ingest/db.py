@@ -55,8 +55,25 @@ def connect() -> psycopg.Connection:
     return psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
 
 
+def _reset_permitted(host: str) -> bool:
+    """Reset is allowed only for a local or explicitly-marked test database."""
+    local = host in {"localhost", "127.0.0.1", "::1"}
+    marked = os.environ.get("LINERFY_RESET_ALLOWED") == "1"
+    return local or marked
+
+
 def reset(conn: psycopg.Connection) -> None:
-    """Drop catalog tables so a fresh migrate + seed is deterministic."""
+    """Drop catalog tables so a fresh migrate + seed is deterministic.
+
+    Refuses to run unless the target is a local database or has been explicitly
+    marked as a test database, so the default command can never destroy tables.
+    """
+    host = conn.info.host or ""
+    if not _reset_permitted(host):
+        raise RuntimeError(
+            "refusing to reset: target host is not a marked local/test database; "
+            "set LINERFY_RESET_ALLOWED=1 only for known test databases"
+        )
     for table in _DROP_ORDER:
         conn.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
 
@@ -93,8 +110,8 @@ def seed(conn: psycopg.Connection, context: IngestedContext) -> int:
         )
         for row in table_rows:
             values = [_db_value(column, row[column]) for column in columns]
-            conn.execute(statement, values)
-            inserted += 1
+            cursor = conn.execute(statement, values)
+            inserted += cursor.rowcount
     return inserted
 
 

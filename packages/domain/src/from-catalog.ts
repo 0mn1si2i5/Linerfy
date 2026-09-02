@@ -1,4 +1,4 @@
-import type { MusicContext } from "./index";
+import { musicContextSchema, type MusicContext } from "./index";
 
 // Row shapes matching the Supabase catalog migration. These are the column
 // names the Python `to_rows` writer and this reader both agree on.
@@ -103,19 +103,28 @@ export interface CatalogRows {
  * Reassemble the public MusicContext from normalized catalog rows.
  *
  * This is the read-side counterpart to the Python `to_public` mapping: it turns
- * the database's uuid-keyed rows back into the slug-keyed display contract.
+ * the database's uuid-keyed rows back into the slug-keyed display contract. It
+ * anchors on `releases[0]` and scopes every other array to that release (or its
+ * own ids), so a second album's rows can never bleed into the result. The
+ * result is validated with `musicContextSchema.parse` before it is returned.
  */
 export function assembleMusicContext(catalog: CatalogRows): MusicContext {
-  const artist = catalog.artists[0];
   const release = catalog.releases[0];
-  if (!artist || !release) {
-    throw new Error("catalog is missing an artist or release");
+  if (!release) {
+    throw new Error("catalog is missing a release");
+  }
+  const artist = catalog.artists.find((a) => a.id === release.artist_id);
+  if (!artist) {
+    throw new Error("catalog is missing the release's artist");
   }
 
   const sourceByUuid = new Map(catalog.review_sources.map((s) => [s.id, s]));
-  const docByUuid = new Map(catalog.review_documents.map((d) => [d.id, d]));
+  const documents = catalog.review_documents.filter(
+    (d) => d.release_id === release.id,
+  );
+  const docByUuid = new Map(documents.map((d) => [d.id, d]));
 
-  const sources = catalog.review_documents
+  const sources = documents
     .filter((d) => d.status === "published")
     .map((d) => {
       const source = {
@@ -132,22 +141,33 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
       return source;
     });
 
-  const excerpts = catalog.review_excerpts.map((e) => ({
-    id: `${docByUuid.get(e.document_id)?.slug ?? e.id}-excerpt`,
-    sourceId: docByUuid.get(e.document_id)?.slug ?? "",
-    text: e.excerpt,
-    kind: e.is_paraphrase ? ("paraphrase" as const) : ("quotation" as const),
-  }));
+  const excerpts = catalog.review_excerpts
+    .filter((e) => docByUuid.has(e.document_id))
+    .map((e) => {
+      const doc = docByUuid.get(e.document_id)!;
+      return {
+        id: `${doc.slug}-excerpt`,
+        sourceId: doc.slug,
+        text: e.excerpt,
+        kind: e.is_paraphrase
+          ? ("paraphrase" as const)
+          : ("quotation" as const),
+      };
+    });
 
-  const genres = catalog.genres.map((g) => ({
-    name: g.name,
-    sourceIds: catalog.genre_sources
-      .filter((gs) => gs.genre_id === g.id)
-      .map((gs) => docByUuid.get(gs.document_id)?.slug)
-      .filter((slug): slug is string => Boolean(slug)),
-  }));
+  const genres = catalog.genres
+    .filter((g) => g.release_id === release.id)
+    .map((g) => ({
+      name: g.name,
+      sourceIds: catalog.genre_sources
+        .filter((gs) => gs.genre_id === g.id)
+        .map((gs) => docByUuid.get(gs.document_id)?.slug)
+        .filter((slug): slug is string => Boolean(slug)),
+    }));
 
-  const summaryRun = catalog.summary_runs[0];
+  const summaryRun = catalog.summary_runs.find(
+    (r) => r.release_id === release.id,
+  );
   const claims = summaryRun
     ? catalog.claims
         .filter((c) => c.summary_run_id === summaryRun.id)
@@ -162,7 +182,7 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
         }))
     : [];
 
-  return {
+  return musicContextSchema.parse({
     artist: { id: artist.slug, name: artist.name },
     release: {
       id: release.slug,
@@ -173,12 +193,14 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
         : new Date().getUTCFullYear(),
       ...(release.artwork_url ? { artworkUrl: release.artwork_url } : {}),
     },
-    recordings: catalog.recordings.map((r) => ({
-      id: r.id,
-      title: r.title,
-      releaseId: release.slug,
-      providerIds: {},
-    })),
+    recordings: catalog.recordings
+      .filter((r) => r.release_id === release.id)
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        releaseId: release.slug,
+        providerIds: {},
+      })),
     genres,
     sources,
     excerpts,
@@ -186,8 +208,10 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
       locale: summaryRun?.locale ?? "en",
       corpusHash: summaryRun?.corpus_hash ?? "",
       model: summaryRun?.model ?? "",
-      generatedAt: summaryRun?.generated_at ?? new Date(0).toISOString(),
+      generatedAt: summaryRun?.generated_at
+        ? new Date(summaryRun.generated_at).toISOString()
+        : new Date(0).toISOString(),
       claims,
     },
-  };
+  });
 }

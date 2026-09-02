@@ -1,7 +1,21 @@
-import type { MusicContext } from "@linerfy/domain";
 import { LinerfyMark, MusicContextCard } from "@linerfy/ui";
 
-export function HomePage({ context }: { context: MusicContext | null }) {
+import type { FeaturedContextResult } from "../lib/catalog";
+
+function Featured({ result }: { result: FeaturedContextResult }) {
+  switch (result.status) {
+    case "ok":
+      return <MusicContextCard context={result.context} />;
+    case "not-found":
+      return <p className="empty-state">这张专辑还没有被覆盖。</p>;
+    case "query-failed":
+      return <p className="empty-state">语境暂时无法加载，请稍后再试。</p>;
+    case "invalid":
+      return <p className="empty-state">语境数据异常，请稍后再试。</p>;
+  }
+}
+
+export function HomePage({ result }: { result: FeaturedContextResult }) {
   return (
     <main>
       <nav className="site-nav" aria-label="Main navigation">
@@ -41,11 +55,7 @@ export function HomePage({ context }: { context: MusicContext | null }) {
           <p className="eyebrow">A WORKING CONTEXT</p>
           <p>第一版先证明一件事：每一句总结，都能回到它来自的乐评。</p>
         </div>
-        {context ? (
-          <MusicContextCard context={context} />
-        ) : (
-          <p className="empty-state">这张专辑还没有被覆盖。</p>
-        )}
+        <Featured result={result} />
       </section>
 
       <footer>
