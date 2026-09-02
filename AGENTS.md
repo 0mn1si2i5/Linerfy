@@ -7,7 +7,7 @@ Linerfy is a lightweight music-criticism companion, not a player or social netwo
 ## 核心契约 / Non-negotiable contracts
 
 - 语料先于模型：公开的生成结论必须建立在已保存的乐评文档上，并保留文档级引用。Corpus before model: every generated public claim requires stored review documents and document-level citations.
-- 公开内容默认只包含元数据、短摘录或转述以及原文链接；全文必须获得明确授权。Public output defaults to metadata, short excerpts or paraphrases, and original links; full text requires explicit permission.
+- 公开内容默认只包含元数据、短摘录或转述以及原文链接；全文永不公开。采集端可在私有存储中保留全文用于生成总结，但全文不进入任何公开接口、前端或仓库。Public output defaults to metadata, short excerpts or paraphrases, and original links; full text is never public. The ingestion side may hold full text privately to produce summaries, but it never reaches a public interface, frontend, or repository.
 - 缺少覆盖时返回明确状态；在线用户请求不直接启动爬虫。Return an explicit missing-coverage state; interactive requests do not start crawlers.
 - 新增媒体来源适配器前，先在 `ingest/src/linerfy_ingest/models.py` 声明并执行 `SourcePolicy`。Define and enforce `SourcePolicy` before adding a publication adapter.
 - 播放器元数据是不可信数据。Electron 主进程只运行内置固定程序，不把元数据拼进脚本或 shell。Treat player metadata as untrusted data; Electron runs bundled fixed programs without interpolation.

@@ -63,6 +63,6 @@ Web 是第一公开形态，个人验证阶段使用 Vercel Hobby 和 Supabase F
 
 The web is the first public surface, targeting Vercel Hobby and Supabase Free during personal validation. `.env.example` lists names only; real values stay in local or deployment secrets.
 
-生产来源适配器、定时采集、模型调用、认证和补全请求队列不属于当前脚手架。它们只会随着一条可验证的真实产品链路逐步加入。
+内容边界：采集端可私有保存全文用于生成总结，但公开网页/桌面端只展示 AI 总结、有限摘录、元数据与原文链接；全文不进入公开接口、前端或仓库。来源适配器（乐评网站与社区）是下一条可验证纵向切片；定时采集、模型调用、认证和补全请求队列仍不属于当前脚手架，随真实产品链路逐步加入。
 
-Production adapters, scheduled ingestion, model calls, authentication, and a coverage-request queue are outside this scaffold. They will be added only through verified product slices.
+Content boundary: the ingestion side may hold full text privately to produce summaries, but the public web/desktop surface shows only AI summaries, short excerpts, metadata, and original links; full text never reaches a public interface, frontend, or repository. Source adapters (review sites and communities) are the next verified slice; scheduled ingestion, model calls, authentication, and a coverage-request queue remain outside the scaffold.
