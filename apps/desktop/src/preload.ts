@@ -1,6 +1,8 @@
 import type { NowPlayingTrack } from "@linerfy/now-playing";
 import { contextBridge, ipcRenderer } from "electron";
 
+import type { LoginState } from "./auth-state";
+
 export interface WindowLockState {
   locked: boolean;
 }
@@ -13,6 +15,9 @@ export interface LinerfyDesktopBridge {
   getWindowState(): Promise<WindowLockState>;
   setWindowLocked(locked: boolean): Promise<void>;
   onWindowStateChanged(callback: (state: WindowLockState) => void): () => void;
+  getAuthState(): Promise<LoginState>;
+  signOut(): Promise<void>;
+  onAuthStateChanged(callback: (state: LoginState) => void): () => void;
 }
 
 contextBridge.exposeInMainWorld("linerfy", {
@@ -37,5 +42,14 @@ contextBridge.exposeInMainWorld("linerfy", {
     ) => callback(state);
     ipcRenderer.on("window:state", listener);
     return () => ipcRenderer.removeListener("window:state", listener);
+  },
+  getAuthState: () =>
+    ipcRenderer.invoke("auth:get-state") as Promise<LoginState>,
+  signOut: () => ipcRenderer.invoke("auth:sign-out") as Promise<void>,
+  onAuthStateChanged: (callback: (state: LoginState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: LoginState) =>
+      callback(state);
+    ipcRenderer.on("auth:state", listener);
+    return () => ipcRenderer.removeListener("auth:state", listener);
   },
 } satisfies LinerfyDesktopBridge);

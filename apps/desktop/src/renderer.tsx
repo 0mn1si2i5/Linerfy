@@ -3,6 +3,7 @@ import type { NowPlayingTrack } from "@linerfy/now-playing";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { LoginState } from "./auth-state";
 import "./renderer.css";
 
 type ViewState =
@@ -13,6 +14,7 @@ type ViewState =
 function DesktopApp() {
   const [view, setView] = useState<ViewState>({ kind: "loading" });
   const [locked, setLocked] = useState(true);
+  const [auth, setAuth] = useState<LoginState>({ status: "signed-out" });
 
   useEffect(() => {
     let mounted = true;
@@ -33,10 +35,18 @@ function DesktopApp() {
       setLocked(state.locked),
     );
 
+    void window.linerfy.getAuthState().then((state) => {
+      if (mounted) setAuth(state);
+    });
+    const stopAuthState = window.linerfy.onAuthStateChanged((state) =>
+      setAuth(state),
+    );
+
     return () => {
       mounted = false;
       stopNowPlaying();
       stopWindowState();
+      stopAuthState();
     };
   }, []);
 
@@ -46,14 +56,28 @@ function DesktopApp() {
         <span className="brand">
           <LinerfyMark /> Linerfy
         </span>
-        <button
-          className="lock-toggle"
-          type="button"
-          title={locked ? "解锁为普通窗口" : "重新锁定为菜单栏窗口"}
-          onClick={() => void window.linerfy.setWindowLocked(!locked)}
-        >
-          {locked ? "解锁" : "锁定"}
-        </button>
+        <div className="header-actions">
+          {auth.status === "signed-in" ? (
+            <button
+              className="auth-toggle"
+              type="button"
+              title="退出登录"
+              onClick={() => void window.linerfy.signOut()}
+            >
+              已登录
+            </button>
+          ) : (
+            <span className="auth-toggle muted">未登录</span>
+          )}
+          <button
+            className="lock-toggle"
+            type="button"
+            title={locked ? "解锁为普通窗口" : "重新锁定为菜单栏窗口"}
+            onClick={() => void window.linerfy.setWindowLocked(!locked)}
+          >
+            {locked ? "解锁" : "锁定"}
+          </button>
+        </div>
       </header>
 
       {view.kind === "loading" ? (

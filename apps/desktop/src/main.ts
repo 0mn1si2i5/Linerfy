@@ -15,12 +15,19 @@ import {
   globalShortcut,
   ipcMain,
   nativeImage,
+  safeStorage,
   screen,
   shell,
   Tray,
 } from "electron";
 
+import type { LoginState } from "./auth-state";
 import { createWindowOptions } from "./security";
+import {
+  createTokenStore,
+  type SafeCrypto,
+  type TokenStore,
+} from "./token-store";
 import { TRAY_ICON_DATA_URL } from "./tray-icon";
 import {
   defaultWindowState,
@@ -67,6 +74,28 @@ let isQuitting = false;
 let pollTimer: NodeJS.Timeout | null = null;
 
 const stateFile = () => `${app.getPath("userData")}/window-state.json`;
+const tokenFile = () => `${app.getPath("userData")}/session-token.json`;
+
+// Encrypt the session token with the OS secure storage (Keychain on macOS).
+const safeCrypto: SafeCrypto = {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (plain) => safeStorage.encryptString(plain).toString("base64"),
+  decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, "base64")),
+};
+
+let tokenStore: TokenStore | null = null;
+
+function loginState(): LoginState {
+  return tokenStore && tokenStore.load()
+    ? { status: "signed-in" }
+    : { status: "signed-out" };
+}
+
+function sendAuthState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("auth:state", loginState());
+  }
+}
 
 function popoverSize(): { width: number; height: number } {
   return {
@@ -238,8 +267,16 @@ ipcMain.handle("window:set-locked", async (_event, locked: boolean) => {
   if (mainWindow) await applyMode(mainWindow);
 });
 
+ipcMain.handle("auth:get-state", () => loginState());
+
+ipcMain.handle("auth:sign-out", () => {
+  tokenStore?.clear();
+  sendAuthState();
+});
+
 void app.whenReady().then(async () => {
   state = await loadWindowState(stateFile());
+  tokenStore = createTokenStore(tokenFile(), safeCrypto);
   createWindow();
   createTray();
   globalShortcut.register(TOGGLE_SHORTCUT, () => toggleWindow());

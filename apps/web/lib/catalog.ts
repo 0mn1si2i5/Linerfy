@@ -22,15 +22,18 @@ export type ContextResult =
   | { status: "invalid"; message: string };
 
 function createSupabase() {
+  // Server-side reads use the service role key, which bypasses row-level
+  // security. Anonymous catalog reads are removed at the database layer (see
+  // the auth-boundary migration); only this trusted server path reads rows.
   return createClient(
     requireEnv("SUPABASE_URL"),
-    requireEnv("SUPABASE_PUBLISHABLE_KEY"),
+    requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   );
 }
 
 /**
  * Read a release's normalized catalog rows from Supabase and reassemble the
- * public MusicContext. Runs only on the server; the anon key never reaches the
+ * public MusicContext. Runs only on the server; neither key reaches the
  * browser bundle.
  *
  * Every join-table query is scoped to this release's own ids, so a second

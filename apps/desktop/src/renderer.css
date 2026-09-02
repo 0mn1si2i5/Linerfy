@@ -185,14 +185,27 @@ h2 {
 .companion-header .brand {
   font-size: 17px;
 }
-.lock-toggle {
+.header-actions {
   -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.auth-toggle,
+.lock-toggle {
   padding: 5px 11px;
   font-size: 12px;
   color: #665f51;
   background: transparent;
   border: 1px solid #c9c1af;
 }
+.auth-toggle {
+  cursor: pointer;
+}
+.auth-toggle.muted {
+  cursor: default;
+}
+.auth-toggle:hover,
 .lock-toggle:hover {
   background: #ece6d8;
 }

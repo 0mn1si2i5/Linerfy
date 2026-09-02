@@ -86,8 +86,8 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 ## 当前状态 / Status
 
-- **已实现**：Supabase catalog 与行级权限；可追溯中文总结（模型边界、原子发布）；DB 测试双重守卫与隔离实体；多 claim 展示。
-- **部分实现**：macOS 播放识别（普通窗口，菜单栏/快捷键/窗口状态待做）。
-- **计划中**：GitHub OAuth 与认证边界；MusicBrainz/Wikidata/CritiqueBrainz/Wikipedia 适配器；enrichment jobs；模型 provider 抽象；管理 CLI。
+- **已实现**：Supabase catalog 与行级权限（含认证边界迁移：取消匿名读取）；可追溯中文总结（模型边界、原子发布、多 provider：OpenAI 兼容 + Anthropic、预算守卫）；DB 测试双重守卫与隔离实体；多 claim 展示；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；macOS 菜单栏 companion（popover、全局快捷键、窗口状态、轮询与播放识别）。
+- **部分实现**：GitHub OAuth 认证（代码与迁移就绪；需在 Supabase 启用 GitHub provider、配置回调与白名单后生效）。
+- **计划中**：CritiqueBrainz/Wikipedia 语料适配器；enrichment jobs；管理 CLI；集成验收。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。
