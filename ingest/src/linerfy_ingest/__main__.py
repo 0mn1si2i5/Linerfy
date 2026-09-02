@@ -39,10 +39,15 @@ from .db import (
     verify,
 )
 from .guardian import GuardianAdapter, build_context
+from .jobs import PostgresJobStore, run_once
 from .providers import ChatProvider, ModelConfig, resolve_provider
 from .summarize import read_corpus, summarize, write_summary
 
 _FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "reviews.json"
+
+# The enrichment stage handlers. Populated during integration (M8), once each
+# stage has a real consumer; until then the tick safely reports "no handler".
+_STAGE_HANDLERS: dict = {}
 
 _HELP = """usage: python -m linerfy_ingest <mode> [options]
 
@@ -50,6 +55,7 @@ modes:
   --fixture [--reset]          load the offline fixture (insert-only, never overwrites)
   --guardian <article-path>    fetch one review from The Guardian's Content API
   --summarize <release-slug>   summarize a release's published bodies into Chinese claims
+  --run-enrichment             run one enrichment worker tick (claim + advance one job)
   --prepare-test-db            migrate and mark the target as the dedicated test DB
   --help                       show this help
 
@@ -57,6 +63,7 @@ examples:
   python -m linerfy_ingest --fixture
   python -m linerfy_ingest --guardian music/2019/aug/30/lana-del-rey-norman-fucking-rockwell-review
   python -m linerfy_ingest --summarize norman-fucking-rockwell
+  python -m linerfy_ingest --run-enrichment
 """
 
 
@@ -90,6 +97,14 @@ def _run_prepare_test_db() -> None:
     with connect() as conn:
         prepare_test_db(conn)
     print("prepared test database: applied migration and marked it")
+
+
+def _run_enrichment() -> None:
+    """Run one worker tick: reap timeouts, claim one job, run its stage."""
+    with connect(autocommit=False) as conn:
+        processed = run_once(PostgresJobStore(conn), _STAGE_HANDLERS)
+        conn.commit()
+    print(f"enrichment tick: processed {processed} job(s)")
 
 
 def _resolve_model() -> ChatProvider:
@@ -170,6 +185,8 @@ def main() -> None:
         if index + 1 >= len(args):
             raise SystemExit("usage: python -m linerfy_ingest --summarize <release-slug>")
         _run_summarize(args[index + 1])
+    elif "--run-enrichment" in args:
+        _run_enrichment()
     else:
         print(_HELP)
         raise SystemExit(2)
