@@ -1,10 +1,12 @@
 export type NowPlayingProviderName = "spotify" | "apple-music";
+export type PlaybackState = "playing" | "paused";
 
 export interface NowPlayingTrack {
   provider: NowPlayingProviderName;
   title: string;
   artist: string;
   album: string;
+  state: PlaybackState;
   providerUrl?: string;
 }
 
@@ -25,6 +27,7 @@ if (!spotify.running() || spotify.playerState() === "stopped") {
     title: track.name(),
     artist: track.artist(),
     album: track.album(),
+    state: spotify.playerState() === "playing" ? "playing" : "paused",
     providerUrl: track.spotifyUrl(),
   });
 }
@@ -41,9 +44,14 @@ if (!music.running() || music.playerState() === "stopped") {
     title: track.name(),
     artist: track.artist(),
     album: track.album(),
+    state: music.playerState() === "playing" ? "playing" : "paused",
   });
 }
 `.trim();
+
+function isPlaybackState(value: unknown): value is PlaybackState {
+  return value === "playing" || value === "paused";
+}
 
 function parseTrack(
   output: string,
@@ -60,6 +68,7 @@ function parseTrack(
     typeof track.title !== "string" ||
     typeof track.artist !== "string" ||
     typeof track.album !== "string" ||
+    !isPlaybackState(track.state) ||
     (track.providerUrl !== undefined && typeof track.providerUrl !== "string")
   ) {
     throw new Error(`Invalid ${provider} now-playing result`);
@@ -70,6 +79,7 @@ function parseTrack(
     title: track.title,
     artist: track.artist,
     album: track.album,
+    state: track.state,
     ...(typeof track.providerUrl === "string"
       ? { providerUrl: track.providerUrl }
       : {}),
@@ -104,20 +114,36 @@ export function createAppleMusicProvider(
   );
 }
 
+/**
+ * Combine providers, preferring the one that is actually playing. When several
+ * are playing (or none are), the provider that last succeeded wins, so a stable
+ * preference emerges across polls without ever overriding a playing player.
+ */
 export function createNowPlayingService(
   providers: NowPlayingProvider[],
 ): NowPlayingProvider {
+  let lastPreferred: NowPlayingProviderName | null = null;
+
   return {
     async getNowPlaying() {
-      for (const provider of providers) {
-        try {
-          const track = await provider.getNowPlaying();
-          if (track) return track;
-        } catch {
-          // A player may be closed or automation permission may be denied.
+      const settled = await Promise.allSettled(
+        providers.map((provider) => provider.getNowPlaying()),
+      );
+      const tracks: NowPlayingTrack[] = [];
+      for (const result of settled) {
+        if (result.status === "fulfilled" && result.value !== null) {
+          tracks.push(result.value);
         }
       }
-      return null;
+      if (tracks.length === 0) return null;
+
+      const playing = tracks.filter((track) => track.state === "playing");
+      const candidates = playing.length > 0 ? playing : tracks;
+      const chosen =
+        candidates.find((track) => track.provider === lastPreferred) ??
+        candidates[0]!;
+      lastPreferred = chosen.provider;
+      return chosen;
     },
   };
 }
