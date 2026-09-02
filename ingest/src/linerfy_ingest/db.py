@@ -71,8 +71,11 @@ _PRIMARY_KEYS = {
 }
 
 
-def connect() -> psycopg.Connection:
-    return psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
+def connect(*, autocommit: bool = True) -> psycopg.Connection:
+    """Open a connection. Default is autocommit (one statement == one commit),
+    used by the read path and one-shot seeding. Pass ``autocommit=False`` when a
+    caller must control commit/rollback itself (e.g. an atomic summary write)."""
+    return psycopg.connect(os.environ["DATABASE_URL"], autocommit=autocommit)
 
 
 def _reset_permitted(host: str) -> bool:
@@ -80,6 +83,21 @@ def _reset_permitted(host: str) -> bool:
     local = host in {"localhost", "127.0.0.1", "::1"}
     marked = os.environ.get("LINERFY_RESET_ALLOWED") == "1"
     return local or marked
+
+
+def require_test_db(conn: psycopg.Connection) -> None:
+    """Refuse destructive or test-only writes against an unmarked remote DB.
+
+    Local databases and those explicitly marked with ``LINERFY_RESET_ALLOWED=1``
+    are the only targets that may be reset or loaded with the fixture; the real
+    catalog is always remote and therefore always refused.
+    """
+    host = conn.info.host or ""
+    if not _reset_permitted(host):
+        raise RuntimeError(
+            "refusing to write: target host is not a marked local/test database; "
+            "set LINERFY_RESET_ALLOWED=1 inline for this one command only"
+        )
 
 
 def reset(conn: psycopg.Connection) -> None:
@@ -90,12 +108,7 @@ def reset(conn: psycopg.Connection) -> None:
     For a remote test database, set LINERFY_RESET_ALLOWED=1 inline on the reset
     command only -- do not persist it.
     """
-    host = conn.info.host or ""
-    if not _reset_permitted(host):
-        raise RuntimeError(
-            "refusing to reset: target host is not a marked local/test database; "
-            "set LINERFY_RESET_ALLOWED=1 inline for this one command only"
-        )
+    require_test_db(conn)
     for table in _DROP_ORDER:
         conn.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
 
@@ -117,8 +130,33 @@ def _db_value(name: str, value: object) -> object:
     return value
 
 
-def seed(conn: psycopg.Connection, context: IngestedContext) -> int:
+def _release_present(conn: psycopg.Connection, rows: dict[str, list[dict]]) -> bool:
+    """True when the context's release already has a row, so a bootstrap-only
+    (``overwrite=False``) seed should write nothing."""
+    release_rows = rows["releases"]
+    if not release_rows:
+        return False
+    release_id = uuid.UUID(release_rows[0]["id"])
+    return (
+        conn.execute("SELECT 1 FROM public.releases WHERE id = %s", (release_id,)).fetchone()
+        is not None
+    )
+
+
+def seed(
+    conn: psycopg.Connection, context: IngestedContext, *, overwrite: bool = True
+) -> int:
+    """Load a context into the catalog.
+
+    ``overwrite=True`` (real adapters) upserts, so a later fetch with real data
+    replaces an earlier placeholder. ``overwrite=False`` (the fixture) is a
+    bootstrap-only write: if the release is already present it writes nothing at
+    all, so it can neither overwrite nor extend a record that already exists --
+    the hand-authored fixture stays a pure contract check.
+    """
     rows = to_rows(context)
+    if not overwrite and _release_present(conn, rows):
+        return 0
     written = 0
     for table in _TABLE_ORDER:
         table_rows = rows[table]
@@ -126,15 +164,22 @@ def seed(conn: psycopg.Connection, context: IngestedContext) -> int:
             continue
         columns = list(table_rows[0].keys())
         placeholders = ", ".join(["%s"] * len(columns))
-        primary_keys = _PRIMARY_KEYS[table]
-        update_columns = [column for column in columns if column not in primary_keys]
-        if update_columns:
-            on_conflict = (
-                f"ON CONFLICT ({', '.join(primary_keys)}) DO UPDATE SET "
-                + ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns)
-            )
-        else:
+        if not overwrite:
             on_conflict = "ON CONFLICT DO NOTHING"
+        else:
+            primary_keys = _PRIMARY_KEYS[table]
+            update_columns = [
+                column for column in columns if column not in primary_keys
+            ]
+            if update_columns:
+                on_conflict = (
+                    f"ON CONFLICT ({', '.join(primary_keys)}) DO UPDATE SET "
+                    + ", ".join(
+                        f"{column} = EXCLUDED.{column}" for column in update_columns
+                    )
+                )
+            else:
+                on_conflict = "ON CONFLICT DO NOTHING"
         statement = (
             f"INSERT INTO public.{table} ({', '.join(columns)}) "
             f"VALUES ({placeholders}) {on_conflict}"
