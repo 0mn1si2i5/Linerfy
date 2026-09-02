@@ -104,10 +104,22 @@ h2 {
   padding: 24px 0;
   border-block: 1px solid #c9c1af;
 }
-.consensus-copy {
+.claim-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.claim-item {
+  padding: 16px 0;
+}
+.claim-item + .claim-item {
+  border-top: 1px solid #c9c1af;
+}
+.claim-text {
   max-width: 720px;
+  margin: 0 0 8px;
   font:
-    25px/1.5 Georgia,
+    20px/1.5 Georgia,
     serif;
 }
 .claim-sources {

@@ -25,10 +25,7 @@ export function SourceLink({
 }
 
 export function MusicContextCard({ context }: { context: MusicContext }) {
-  const claim = context.summary.claims[0];
-  const claimSources = context.sources.filter((source) =>
-    claim?.sourceIds.includes(source.id),
-  );
+  const claims = context.summary.claims;
 
   return (
     <article className="context-card">
@@ -58,13 +55,27 @@ export function MusicContextCard({ context }: { context: MusicContext }) {
         </div>
       </header>
 
-      {claim ? (
+      {claims.length ? (
         <section className="consensus-block">
           <p className="section-label">中文共识</p>
-          <p className="consensus-copy">{claim.text}</p>
-          <p className="claim-sources">
-            基于 {claimSources.map((source) => source.publication).join("、")}
-          </p>
+          <ul className="claim-list">
+            {claims.map((claim) => {
+              const claimSources = context.sources.filter((source) =>
+                claim.sourceIds.includes(source.id),
+              );
+              return (
+                <li className="claim-item" key={claim.id}>
+                  <p className="claim-text">{claim.text}</p>
+                  <p className="claim-sources">
+                    基于{" "}
+                    {claimSources
+                      .map((source) => source.publication)
+                      .join("、")}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
         </section>
       ) : null}
 
