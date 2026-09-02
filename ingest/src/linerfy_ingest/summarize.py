@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,13 +26,11 @@ from pydantic import BaseModel, Field
 from .models import CitedClaim, Summary
 from .seed import stable_uuid
 
-_DEFAULT_BASE_URL = "https://api.deepseek.com"
 _DEFAULT_MODEL = "deepseek-chat"
 
 _MIN_CLAIMS = 3
 _MAX_CLAIMS = 5
 _MAX_CLAIM_TEXT_CHARS = 400
-_MAX_TOKENS = 2048
 
 # The rules that must not be overridable by corpus text live here, in the system
 # message, not in the user message alongside the untrusted material.
@@ -135,69 +132,32 @@ def _parse_claims(raw: str, corpus_ids: set[str]) -> list[CitedClaim]:
     return claims
 
 
-def _chat_completion(
-    api_key: str, base_url: str, model: str, messages: list[dict[str, str]]
-) -> tuple[str, str]:
-    """POST to the DeepSeek chat endpoint and return ``(content, finish_reason)``.
-
-    JSON Output is enabled and the response is never trusted before the caller
-    checks its ``finish_reason``.
-    """
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "temperature": 0,
-            "max_tokens": _MAX_TOKENS,
-            "response_format": {"type": "json_object"},
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    choice = payload["choices"][0]
-    return choice["message"]["content"], choice.get("finish_reason", "")
-
-
 def summarize(
     corpus: list[CorpusDocument],
     *,
-    api_key: str,
-    base_url: str = _DEFAULT_BASE_URL,
     model: str = _DEFAULT_MODEL,
     locale: str = "zh-CN",
     prompt_version: str = "summarize-v2",
     generated_at: datetime | None = None,
-    chat=None,
+    chat,
 ) -> Summary:
     """Summarize a corpus into a validated ``Summary``.
 
-    ``chat`` is injectable for tests; it must have the same signature as
-    ``_chat_completion`` and return ``(content, finish_reason)``.
+    ``chat`` is an injected provider callable with signature
+    ``(messages) -> ChatResult``; the provider (OpenAI-compatible or Anthropic)
+    is resolved by the caller, never here.
     """
     if not corpus:
         raise ValueError("summarize requires a non-empty corpus")
-    if not api_key:
-        raise ValueError("MODEL_API_KEY is required")
 
-    chat = chat or _chat_completion
-    content, finish_reason = chat(api_key, base_url, model, _build_messages(corpus))
-    if finish_reason != "stop":
+    result = chat(_build_messages(corpus))
+    if result.finish_reason != "stop":
         raise ValueError(
-            f"model did not finish normally (finish_reason={finish_reason!r}); "
+            f"model did not finish normally (finish_reason={result.finish_reason!r}); "
             "response discarded"
         )
 
-    claims = _parse_claims(content, {document.id for document in corpus})
+    claims = _parse_claims(result.content, {document.id for document in corpus})
     return Summary(
         locale=locale,
         model=model,

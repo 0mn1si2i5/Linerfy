@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from linerfy_ingest.providers import ChatResult
 from linerfy_ingest.summarize import (
     _MAX_CLAIM_TEXT_CHARS,
     CorpusDocument,
@@ -43,8 +44,8 @@ def _three_claims() -> list[tuple[str, list[str]]]:
 
 
 def _fake_chat(content: str, finish_reason: str = "stop"):
-    def chat(api_key, base_url, model, messages):
-        return content, finish_reason
+    def chat(messages):
+        return ChatResult(content=content, finish_reason=finish_reason)
 
     return chat
 
@@ -172,7 +173,7 @@ def test_parse_claims_rejects_invalid_json() -> None:
 
 def test_summarize_returns_validated_summary() -> None:
     summary = summarize(
-        _corpus(), api_key="sk-test", chat=_fake_chat(_payload(_three_claims()))
+        _corpus(), chat=_fake_chat(_payload(_three_claims()))
     )
     assert len(summary.claims) == 3
     assert summary.model == "deepseek-chat"
@@ -183,13 +184,10 @@ def test_summarize_rejects_non_stop_finish_reason() -> None:
     with pytest.raises(ValueError, match="finish_reason"):
         summarize(
             _corpus(),
-            api_key="sk-test",
             chat=_fake_chat(_payload(_three_claims()), finish_reason="length"),
         )
 
 
-def test_summarize_requires_nonempty_corpus_and_key() -> None:
+def test_summarize_requires_nonempty_corpus() -> None:
     with pytest.raises(ValueError, match="non-empty"):
-        summarize([], api_key="sk-test")
-    with pytest.raises(ValueError, match="MODEL_API_KEY"):
-        summarize(_corpus(), api_key="")
+        summarize([], chat=_fake_chat(_payload(_three_claims())))

@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from .adapter import FixtureSourceAdapter
+from .budget import BudgetGuard
 from .db import (
     apply_migration,
     connect,
@@ -38,6 +39,7 @@ from .db import (
     verify,
 )
 from .guardian import GuardianAdapter, build_context
+from .providers import ChatProvider, ModelConfig, resolve_provider
 from .summarize import read_corpus, summarize, write_summary
 
 _FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "reviews.json"
@@ -90,14 +92,51 @@ def _run_prepare_test_db() -> None:
     print("prepared test database: applied migration and marked it")
 
 
+def _resolve_model() -> ChatProvider:
+    """Build the single active provider from environment configuration."""
+    protocol = os.environ.get("MODEL_PROTOCOL", "openai-compatible")
+    api_key = os.environ.get("MODEL_API_KEY", "")
+    if not api_key:
+        raise SystemExit("MODEL_API_KEY is required")
+    config = ModelConfig(
+        protocol=protocol,
+        model=os.environ.get("MODEL_NAME", "deepseek-chat"),
+        api_key=api_key,
+        base_url=os.environ.get("MODEL_BASE_URL", "https://api.deepseek.com"),
+        max_tokens=int(os.environ.get("MODEL_MAX_TOKENS", "2048")),
+    )
+    return resolve_provider(config)
+
+
+def _budget_path() -> str:
+    return os.environ.get(
+        "MODEL_BUDGET_PATH", str(Path.home() / ".linerfy" / "model-budget.json")
+    )
+
+
 def _run_summarize(release_slug: str) -> None:
     with connect() as conn:
         corpus = read_corpus(conn, release_slug)
     if not corpus:
         raise SystemExit(f"no published review bodies for release '{release_slug}'")
 
+    provider = _resolve_model()
+    guard = BudgetGuard(_budget_path())
+    if guard.exceeded():
+        raise SystemExit(
+            f"model budget exhausted ({guard.total_tokens()} tokens used); "
+            "refusing real call"
+        )
+
+    def chat(messages):
+        if guard.exceeded():
+            raise ValueError("model budget exhausted")
+        result = provider.chat(messages)
+        guard.record(result.usage_tokens)
+        return result
+
     # Network call, deliberately outside any database transaction.
-    summary = summarize(corpus, api_key=os.environ.get("MODEL_API_KEY", ""))
+    summary = summarize(corpus, model=provider.model, chat=chat)
 
     with connect(autocommit=False) as conn:
         written = write_summary(conn, release_slug, summary)
