@@ -41,7 +41,12 @@ PAUSE_FLAG = "model_generation_paused"
 
 
 class EnrichmentJob(BaseModel):
-    """A single release's position in the enrichment pipeline."""
+    """A single release's position in the enrichment pipeline.
+
+    ``entity_id`` holds the request fingerprint (the dedup key); ``payload``
+    holds the bounded, untrusted now-playing metadata; ``resolved_release_group_id``
+    and ``resolution_status`` are filled by ``resolve_entity``.
+    """
 
     model_config = {"extra": "forbid"}
 
@@ -52,6 +57,9 @@ class EnrichmentJob(BaseModel):
     retry_count: int = Field(default=0, ge=0)
     last_error: str | None = None
     corpus_hash: str | None = None
+    payload: dict = Field(default_factory=dict)
+    resolved_release_group_id: str | None = None
+    resolution_status: str = "pending"
 
 
 class JobStore(Protocol):
@@ -70,6 +78,10 @@ class JobStore(Protocol):
     def fail(self, job: EnrichmentJob, error: str) -> None: ...
 
     def set_corpus_hash(self, job: EnrichmentJob, corpus_hash: str) -> None: ...
+
+    def set_resolution(
+        self, job: EnrichmentJob, release_group_id: str | None, status: str
+    ) -> None: ...
 
 
 class StageHandler(Protocol):
@@ -153,7 +165,8 @@ class PostgresJobStore:
         if skip_model_stages:
             stage_filter = "AND j.stage NOT IN ('build_source_summaries','build_consensus')"
         row = self.conn.execute(
-            f"SELECT id, entity_id, stage, retry_count, last_error, corpus_hash "
+            "SELECT id, entity_id, stage, retry_count, last_error, corpus_hash, "
+            "payload, resolved_release_group_id, resolution_status "
             "FROM public.enrichment_jobs j "
             f"WHERE j.state = 'queued' {stage_filter} "
             "ORDER BY j.updated_at FOR UPDATE SKIP LOCKED LIMIT 1"
@@ -173,6 +186,9 @@ class PostgresJobStore:
             retry_count=row[3],
             last_error=row[4],
             corpus_hash=row[5],
+            payload=row[6] or {},
+            resolved_release_group_id=row[7],
+            resolution_status=row[8] or "pending",
         )
 
     def advance(
@@ -199,4 +215,13 @@ class PostgresJobStore:
             "UPDATE public.enrichment_jobs SET corpus_hash = %s, updated_at = now() "
             "WHERE id = %s",
             (corpus_hash, job.id),
+        )
+
+    def set_resolution(
+        self, job: EnrichmentJob, release_group_id: str | None, status: str
+    ) -> None:
+        self.conn.execute(
+            "UPDATE public.enrichment_jobs SET resolved_release_group_id = %s, "
+            "resolution_status = %s, updated_at = now() WHERE id = %s",
+            (release_group_id, status, job.id),
         )
