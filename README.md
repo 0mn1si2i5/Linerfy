@@ -86,8 +86,10 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 ## 当前状态 / Status
 
-- **已实现**：Supabase catalog 与行级权限（认证边界迁移：取消匿名读取）；可追溯中文总结（多 provider：OpenAI 兼容 + Anthropic、预算守卫、原子发布）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器；enrichment jobs 队列与状态机（幂等、最多 2 次重试、超时、全局暂停）；管理 CLI（暂停/恢复、队列查看、失败重试、保留清理）；macOS 菜单栏 companion；实体→语料→总结闭环的集成验收。
-- **部分实现**：GitHub OAuth 认证（代码与迁移就绪；需在 Supabase 启用 GitHub provider、配置回调与白名单后生效）。
-- **待用户操作**：生产 Supabase 迁移、Vercel 部署、GitHub OAuth app/Supabase provider 配置、添加 git remote 并推送 `codex/linerfy-v1`。
+> 以下标注依据 fresh 验证（测试 + 构建 + 代码路径），不代表生产联调通过。
+
+- **已实现且有测试**：Supabase catalog 与 RLS（认证边界迁移就绪：取消匿名读取）；可追溯中文总结（模型边界、原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 状态机（幂等、重试、超时、暂停）与管理 CLI；macOS 菜单栏 now-playing 识别。
+- **修复中（组件已建、产品闭环未接通）**：enrichment 五阶段真实 worker（stage handler 未接）；在线任务创建与 worker route；桌面 OAuth 登录与 token 保存；桌面 context 展示；Web 页面认证门禁（当前公开页面绕过认证读取 catalog）；许可证池隔离；可靠 100 元预算账本。
+- **待用户配置**：GitHub OAuth app + Supabase provider + 白名单；生产 Supabase 迁移；Vercel 部署。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。
