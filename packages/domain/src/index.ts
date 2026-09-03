@@ -138,6 +138,22 @@ export const musicContextSchema = z
     }
   });
 
+/**
+ * The POST /api/context response the desktop consumes. It is a discriminated
+ * union over `status` so the client can validate the shape at runtime (never
+ * with a blind TypeScript cast): `ready` always carries a valid `context`, and
+ * the terminal states distinguish `ambiguous` (entity matched more than one
+ * release) from `unavailable` (no match) and `failed`.
+ */
+export const contextApiResponseSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ready"), context: musicContextSchema }),
+  z.object({ status: z.literal("queued"), stage: z.string().optional() }),
+  z.object({ status: z.literal("running"), stage: z.string().optional() }),
+  z.object({ status: z.literal("unavailable") }),
+  z.object({ status: z.literal("ambiguous") }),
+  z.object({ status: z.literal("failed"), stage: z.string().optional() }),
+]);
+
 export type Artist = z.infer<typeof artistSchema>;
 export type Release = z.infer<typeof releaseSchema>;
 export type Recording = z.infer<typeof recordingSchema>;
@@ -149,3 +165,4 @@ export type License = z.infer<typeof licenseSchema>;
 export type SourceSummary = z.infer<typeof sourceSummarySchema>;
 export type ConsensusBlock = z.infer<typeof consensusBlockSchema>;
 export type MusicContext = z.infer<typeof musicContextSchema>;
+export type ContextApiResponse = z.infer<typeof contextApiResponseSchema>;

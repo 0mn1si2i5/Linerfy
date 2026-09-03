@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { musicContextSchema } from "./index";
+import { contextApiResponseSchema, musicContextSchema } from "./index";
 import { featuredContext } from "./fixtures";
 
 describe("musicContextSchema", () => {
@@ -20,5 +20,31 @@ describe("musicContextSchema", () => {
     expect(() => musicContextSchema.parse(context)).toThrow(
       "Every cited claim must reference a source in this context",
     );
+  });
+});
+
+describe("contextApiResponseSchema", () => {
+  it("accepts a ready response that carries a valid context", () => {
+    const parsed = contextApiResponseSchema.parse({
+      status: "ready",
+      context: featuredContext,
+    });
+    expect(parsed.status).toBe("ready");
+  });
+
+  it("rejects a ready response that omits its context", () => {
+    expect(() => contextApiResponseSchema.parse({ status: "ready" })).toThrow();
+  });
+
+  it("accepts the terminal states without a context", () => {
+    for (const status of ["unavailable", "ambiguous", "failed"]) {
+      expect(contextApiResponseSchema.parse({ status }).status).toBe(status);
+    }
+  });
+
+  it("rejects an unknown status", () => {
+    expect(() =>
+      contextApiResponseSchema.parse({ status: "paused" }),
+    ).toThrow();
   });
 });

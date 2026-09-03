@@ -24,6 +24,7 @@ import {
 
 import type { LoginState, SignInResult } from "./auth-state";
 import {
+  parseContextApiResponse,
   trackKey,
   type ContextApiResponse,
   type ContextState,
@@ -263,11 +264,13 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
 
   let body: ContextApiResponse;
   try {
-    body = (await response.json()) as ContextApiResponse;
+    // Validate the response against the shared contract at runtime, never with
+    // a blind cast: a `ready` that omits its context is rejected here.
+    body = parseContextApiResponse(await response.json());
   } catch {
     if (seq === contextFetchSeq) {
       pendingContext = true;
-      sendContext({ status: "error", message: "网络错误" });
+      sendContext({ status: "error", message: "响应格式错误" });
     }
     return;
   }

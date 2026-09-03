@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
 
   const { data: job, error: jobError } = await supabase
     .from("enrichment_jobs")
-    .select("state, stage")
+    .select("state, stage, resolution_status")
     .eq("entity_id", fingerprint)
     .maybeSingle();
   if (jobError) {
@@ -64,6 +64,15 @@ export async function POST(request: NextRequest) {
       if (result.status === "ok") {
         return NextResponse.json({ status: "ready", context: result.context });
       }
+      // The job is marked ready but its context cannot be assembled — surface a
+      // real failure rather than a bare `ready` the client would misread as
+      // carrying a context.
+      return NextResponse.json({ status: "failed", stage: job.stage });
+    }
+    // An entity that matched more than one release is a distinct, recoverable
+    // state — never collapse it into `unavailable`.
+    if (job.state === "unavailable" && job.resolution_status === "ambiguous") {
+      return NextResponse.json({ status: "ambiguous" });
     }
     return NextResponse.json({ status: job.state, stage: job.stage });
   }

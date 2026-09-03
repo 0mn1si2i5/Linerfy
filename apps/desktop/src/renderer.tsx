@@ -137,6 +137,8 @@ function DesktopApp() {
         <p className="context-status muted">正在生成语境…</p>
       ) : context.status === "unavailable" ? (
         <p className="context-status muted">暂无可用语境</p>
+      ) : context.status === "ambiguous" ? (
+        <p className="context-status muted">语境不明确</p>
       ) : context.status === "failed" ? (
         <p className="context-status muted">语境生成失败</p>
       ) : context.status === "error" ? (
