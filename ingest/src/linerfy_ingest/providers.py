@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 _ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
@@ -25,18 +25,31 @@ _DEFAULT_OPENAI_BASE = "https://api.deepseek.com"
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Token usage split by input/output/cache so cost can be estimated.
+
+    Cache read/write are recorded only when a provider reports them; otherwise
+    they stay zero.
+    """
+
+    input: int = 0
+    output: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+
+
+@dataclass(frozen=True)
 class ChatResult:
     """A provider response normalized to a common shape.
 
     ``finish_reason`` is normalized to ``"stop"`` for a normal end-of-turn and
     ``"length"`` for a truncation, matching what the summarizer already checks.
-    ``usage_tokens`` is the total token usage reported by the provider, used by
-    the pre-launch budget guard.
+    ``usage`` carries split token counts for the budget ledger.
     """
 
     content: str
     finish_reason: str
-    usage_tokens: int = 0
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 @dataclass(frozen=True)
@@ -90,10 +103,15 @@ class OpenAICompatibleProvider:
         )
         choice = payload["choices"][0]
         usage = payload.get("usage", {}) or {}
+        details = usage.get("prompt_tokens_details", {}) or {}
         return ChatResult(
             content=choice["message"]["content"],
             finish_reason=choice.get("finish_reason", ""),
-            usage_tokens=usage.get("total_tokens", 0),
+            usage=TokenUsage(
+                input=usage.get("prompt_tokens", 0) or 0,
+                output=usage.get("completion_tokens", 0) or 0,
+                cache_read=details.get("cached_tokens", 0) or 0,
+            ),
         )
 
     def _post_json(self, url: str, headers: dict[str, str], body: bytes) -> dict:
@@ -145,9 +163,15 @@ class AnthropicProvider:
         stop_reason = payload.get("stop_reason", "")
         finish_reason = _normalize_anthropic_stop_reason(stop_reason)
         usage = payload.get("usage", {}) or {}
-        usage_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         return ChatResult(
-            content=content, finish_reason=finish_reason, usage_tokens=usage_tokens
+            content=content,
+            finish_reason=finish_reason,
+            usage=TokenUsage(
+                input=usage.get("input_tokens", 0) or 0,
+                output=usage.get("output_tokens", 0) or 0,
+                cache_read=usage.get("cache_read_input_tokens", 0) or 0,
+                cache_write=usage.get("cache_creation_input_tokens", 0) or 0,
+            ),
         )
 
     def _post_json(self, url: str, headers: dict[str, str], body: bytes) -> dict:

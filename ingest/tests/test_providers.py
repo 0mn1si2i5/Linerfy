@@ -49,7 +49,7 @@ def test_openai_provider_builds_chat_completions_request() -> None:
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {"total_tokens": 123},
+            "usage": {"prompt_tokens": 100, "completion_tokens": 23},
         }
     )
     result = provider.chat(_MESSAGES)
@@ -64,7 +64,8 @@ def test_openai_provider_builds_chat_completions_request() -> None:
 
     assert result.content == '{"claims": []}'
     assert result.finish_reason == "stop"
-    assert result.usage_tokens == 123
+    assert result.usage.input == 100
+    assert result.usage.output == 23
 
 
 def test_openai_provider_reports_length_truncation() -> None:
@@ -76,7 +77,8 @@ def test_openai_provider_reports_length_truncation() -> None:
     )
     result = provider.chat(_MESSAGES)
     assert result.finish_reason == "length"
-    assert result.usage_tokens == 0
+    assert result.usage.input == 0
+    assert result.usage.output == 0
 
 
 def test_anthropic_provider_splits_system_and_maps_stop_reason() -> None:
@@ -98,7 +100,8 @@ def test_anthropic_provider_splits_system_and_maps_stop_reason() -> None:
 
     assert result.content == '{"claims": []}'
     assert result.finish_reason == "stop"
-    assert result.usage_tokens == 30
+    assert result.usage.input == 10
+    assert result.usage.output == 20
 
 
 def test_anthropic_provider_maps_max_tokens_to_length() -> None:

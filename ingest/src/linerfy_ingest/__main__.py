@@ -28,7 +28,7 @@ from pathlib import Path
 
 from .adapter import FixtureSourceAdapter
 from .admin import list_jobs, purge_expired, retry_failed, set_pause
-from .budget import BudgetGuard
+from .budget import BudgetError, BudgetLedger
 from .db import (
     apply_migration,
     connect,
@@ -158,22 +158,21 @@ def _run_summarize(release_slug: str) -> None:
         raise SystemExit(f"no published review bodies for release '{release_slug}'")
 
     provider = _resolve_model()
-    guard = BudgetGuard(_budget_path())
-    if guard.exceeded():
-        raise SystemExit(
-            f"model budget exhausted ({guard.total_tokens()} tokens used); "
-            "refusing real call"
-        )
+    max_tokens = int(os.environ.get("MODEL_MAX_TOKENS", "2048"))
+    ledger = BudgetLedger(_budget_path())
 
     def chat(messages):
-        if guard.exceeded():
-            raise ValueError("model budget exhausted")
+        # Worst-case pre-call check, then settle the actual usage after.
+        ledger.check(provider.model, max_tokens)
         result = provider.chat(messages)
-        guard.record(result.usage_tokens)
+        ledger.settle(provider.model, result.usage)
         return result
 
-    # Network call, deliberately outside any database transaction.
-    summary = summarize(corpus, model=provider.model, chat=chat)
+    try:
+        # Network call, deliberately outside any database transaction.
+        summary = summarize(corpus, model=provider.model, chat=chat)
+    except BudgetError as exc:
+        raise SystemExit(f"refusing real model call: {exc}") from exc
 
     with connect(autocommit=False) as conn:
         written = write_summary(conn, release_slug, summary)
