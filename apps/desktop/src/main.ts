@@ -28,7 +28,11 @@ import {
   type ContextApiResponse,
   type ContextState,
 } from "./context-state";
-import { performOAuthFlow, type SupabaseSession } from "./oauth";
+import {
+  performOAuthFlow,
+  refreshSession,
+  type SupabaseSession,
+} from "./oauth";
 import { createWindowOptions } from "./security";
 import {
   createTokenStore,
@@ -105,8 +109,15 @@ function loadSession(): SupabaseSession | null {
   }
 }
 
+function isSessionExpired(session: SupabaseSession): boolean {
+  return Boolean(session.expires_at && session.expires_at * 1000 <= Date.now());
+}
+
 function loginState(): LoginState {
-  return loadSession() ? { status: "signed-in" } : { status: "signed-out" };
+  const session = loadSession();
+  return session && !isSessionExpired(session)
+    ? { status: "signed-in" }
+    : { status: "signed-out" };
 }
 
 function oauthConfig() {
@@ -130,6 +141,40 @@ function sendAuthState() {
   }
 }
 
+// Refresh the persisted session with its refresh token, or clear it and sign
+// out if the refresh fails (revoked/expired refresh token). Returns the fresh
+// session, or null when there is nothing usable left.
+async function refreshOrClear(): Promise<SupabaseSession | null> {
+  const session = loadSession();
+  if (!session) return null;
+  const config = oauthConfig();
+  if (!config) {
+    tokenStore?.clear();
+    sendAuthState();
+    return null;
+  }
+  try {
+    const refreshed = await refreshSession(config, session.refresh_token);
+    tokenStore?.save(JSON.stringify(refreshed));
+    return refreshed;
+  } catch {
+    tokenStore?.clear();
+    sendAuthState();
+    return null;
+  }
+}
+
+// Return a non-expired session, refreshing it first when it is within 60s of
+// expiry (or already past it). Never returns an expired token to a caller.
+async function ensureFreshSession(): Promise<SupabaseSession | null> {
+  const session = loadSession();
+  if (!session) return null;
+  if (session.expires_at && session.expires_at * 1000 > Date.now() + 60_000) {
+    return session;
+  }
+  return refreshOrClear();
+}
+
 // The authenticated API base (e.g. the Vercel deployment). Context fetching is
 // disabled until it and a session are both present.
 const apiUrl = process.env.LINERFY_API_URL;
@@ -148,19 +193,24 @@ function sendContext(state: ContextState) {
 // guard ensures only the latest request is rendered, and `lastFetchedTrackKey`
 // avoids re-fetching an already-ready track on every poll.
 async function fetchContextForTrack(track: NowPlayingTrack) {
-  const session = loadSession();
-  if (!session || !apiUrl) {
+  if (!apiUrl) {
+    sendContext({ status: "idle" });
+    return;
+  }
+  let session = await ensureFreshSession();
+  if (!session) {
     sendContext({ status: "idle" });
     return;
   }
   const seq = ++contextFetchSeq;
   sendContext({ status: "loading" });
-  try {
-    const response = await fetch(`${apiUrl.replace(/\/+$/, "")}/api/context`, {
+
+  const post = (token: string) =>
+    fetch(`${apiUrl.replace(/\/+$/, "")}/api/context`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         provider: track.provider,
@@ -171,29 +221,67 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
         ...(track.providerUrl ? { providerUrl: track.providerUrl } : {}),
       }),
     });
-    if (seq !== contextFetchSeq) return;
-    if (response.status === 401 || response.status === 403) {
-      sendContext({ status: "idle" });
-      return;
-    }
-    const body = (await response.json()) as ContextApiResponse;
-    if (seq !== contextFetchSeq) return;
-    lastFetchedTrackKey = trackKey(track);
-    if (body.status === "ready") {
-      pendingContext = false;
-      sendContext({ status: "ready", context: body.context });
-    } else if (body.status === "queued" || body.status === "running") {
-      pendingContext = true;
-      sendContext({ status: body.status, stage: body.stage ?? "" });
-    } else {
-      pendingContext = false;
-      sendContext({ status: body.status });
-    }
+
+  let response: Response;
+  try {
+    response = await post(session.access_token);
   } catch {
     if (seq === contextFetchSeq) {
       pendingContext = true;
       sendContext({ status: "error", message: "网络错误" });
     }
+    return;
+  }
+  if (seq !== contextFetchSeq) return;
+
+  // A 401/403 means the access token is stale or revoked: refresh once and
+  // retry. If the refresh (or the retry) still fails, clear the session so the
+  // UI falls back to signed-out rather than showing a stale logged-in state.
+  if (response.status === 401 || response.status === 403) {
+    session = await refreshOrClear();
+    if (!session) {
+      if (seq === contextFetchSeq) sendContext({ status: "idle" });
+      return;
+    }
+    try {
+      response = await post(session.access_token);
+    } catch {
+      if (seq === contextFetchSeq) {
+        pendingContext = true;
+        sendContext({ status: "error", message: "网络错误" });
+      }
+      return;
+    }
+    if (seq !== contextFetchSeq) return;
+    if (response.status === 401 || response.status === 403) {
+      tokenStore?.clear();
+      sendAuthState();
+      if (seq === contextFetchSeq) sendContext({ status: "idle" });
+      return;
+    }
+  }
+
+  let body: ContextApiResponse;
+  try {
+    body = (await response.json()) as ContextApiResponse;
+  } catch {
+    if (seq === contextFetchSeq) {
+      pendingContext = true;
+      sendContext({ status: "error", message: "网络错误" });
+    }
+    return;
+  }
+  if (seq !== contextFetchSeq) return;
+  lastFetchedTrackKey = trackKey(track);
+  if (body.status === "ready") {
+    pendingContext = false;
+    sendContext({ status: "ready", context: body.context });
+  } else if (body.status === "queued" || body.status === "running") {
+    pendingContext = true;
+    sendContext({ status: body.status, stage: body.stage ?? "" });
+  } else {
+    pendingContext = false;
+    sendContext({ status: body.status });
   }
 }
 
