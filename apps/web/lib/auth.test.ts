@@ -1,15 +1,62 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bearerToken,
   githubUserId,
   isWhitelisted,
   parseWhitelist,
+  resolveAuthState,
   type AuthUser,
 } from "./auth";
 
 function githubUser(id: string): AuthUser {
   return { identities: [{ provider: "github", id }] };
 }
+
+describe("bearerToken", () => {
+  it("extracts the token from a Bearer header", () => {
+    expect(bearerToken("Bearer abc.def")).toBe("abc.def");
+  });
+
+  it("returns empty for a missing or non-bearer header", () => {
+    expect(bearerToken(null)).toBe("");
+    expect(bearerToken(undefined)).toBe("");
+    expect(bearerToken("Basic xyz")).toBe("");
+  });
+});
+
+describe("resolveAuthState", () => {
+  const whitelist = new Set(["123"]);
+
+  it("returns unauthenticated for an invalid token", async () => {
+    const verify = async () => null;
+    expect(await resolveAuthState("bad", verify, whitelist)).toEqual({
+      status: "unauthenticated",
+    });
+  });
+
+  it("returns not-whitelisted for a valid but unlisted user", async () => {
+    const verify = async () => githubUser("999");
+    expect(await resolveAuthState("ok", verify, whitelist)).toEqual({
+      status: "not-whitelisted",
+    });
+  });
+
+  it("returns authenticated for a whitelisted user", async () => {
+    const verify = async () => githubUser("123");
+    expect(await resolveAuthState("ok", verify, whitelist)).toEqual({
+      status: "authenticated",
+      githubId: "123",
+    });
+  });
+
+  it("denies a user with no github identity", async () => {
+    const verify = async () => ({ identities: [] });
+    expect(await resolveAuthState("ok", verify, whitelist)).toEqual({
+      status: "not-whitelisted",
+    });
+  });
+});
 
 describe("parseWhitelist", () => {
   it("splits and trims comma-separated ids", () => {

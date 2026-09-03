@@ -1,19 +1,17 @@
+"use client";
+
 import { LinerfyMark } from "@linerfy/ui";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 
-import { getContextBySlug } from "../../../lib/catalog";
 import { ContextView } from "../../context-view";
+import { useAuthenticatedContext } from "../../use-authenticated-context";
 
-// Reads live catalog data on every request; never prerendered.
-export const dynamic = "force-dynamic";
-
-export default async function Page({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
-  const { slug } = await params;
-  const result = await getContextBySlug(slug);
+// Requires an authenticated, whitelisted session; the context is fetched
+// through the authenticated API, never via a direct service-role read.
+export default function Page() {
+  const params = useParams<{ slug: string }>();
+  const state = useAuthenticatedContext(params.slug);
 
   return (
     <main>
@@ -32,7 +30,17 @@ export default async function Page({
             <Link href="/">← 返回</Link>
           </p>
         </div>
-        <ContextView result={result} />
+        {state.status === "loading" ? (
+          <p className="empty-state">正在加载…</p>
+        ) : state.status === "unauthenticated" ? (
+          <p className="empty-state">
+            请先 <a href="/login">登录</a> 后查看乐评语境。
+          </p>
+        ) : state.status === "error" ? (
+          <p className="empty-state">语境暂时无法加载。</p>
+        ) : (
+          <ContextView result={state.result} />
+        )}
       </section>
     </main>
   );

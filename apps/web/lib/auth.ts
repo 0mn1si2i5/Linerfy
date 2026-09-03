@@ -53,24 +53,49 @@ export function readWhitelistFromEnv(): Set<string> {
   return parseWhitelist(process.env.LINERFY_ALLOWED_GITHUB_IDS ?? "");
 }
 
+/** Extract a bearer token from an Authorization header value. */
+export function bearerToken(header: string | null | undefined): string {
+  if (!header) return "";
+  return header.startsWith("Bearer ")
+    ? header.slice("Bearer ".length).trim()
+    : "";
+}
+
+/** A verifier seam: given a token, resolve the authenticated user or null. */
+export type TokenVerifier = (token: string) => Promise<AuthUser | null>;
+
 /**
- * Verify a bearer token and check it against the whitelist.
- *
- * The token is validated against Supabase Auth using the publishable (anon)
- * key, which is the correct key for verifying a user's own JWT; the service
- * role key is never used on caller-supplied tokens.
+ * The real verifier: validate a caller's token against Supabase Auth using the
+ * publishable (anon) key. The service role key is never used on caller tokens.
  */
-export async function resolveAuthState(token: string): Promise<AuthState> {
+async function supabaseTokenVerifier(token: string): Promise<AuthUser | null> {
   const supabase = createClient(
     requireEnv("SUPABASE_URL"),
     requireEnv("SUPABASE_PUBLISHABLE_KEY"),
   );
   const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return { status: "unauthenticated" };
+  if (error || !data.user) return null;
+  return data.user as AuthUser;
+}
 
-  const user: AuthUser = data.user;
+/**
+ * Classify a bearer token: `authenticated` (whitelisted), `unauthenticated`
+ * (no/invalid token), or `not-whitelisted` (valid token, id not on the list).
+ *
+ * The verifier and whitelist are injectable so the three outcomes are unit-
+ * testable without a network call; the defaults use the real Supabase check
+ * and the environment whitelist.
+ */
+export async function resolveAuthState(
+  token: string,
+  verify: TokenVerifier = supabaseTokenVerifier,
+  whitelist: Set<string> = readWhitelistFromEnv(),
+): Promise<AuthState> {
+  const user = await verify(token);
+  if (!user) return { status: "unauthenticated" };
+
   const githubId = githubUserId(user);
-  if (githubId === null || !readWhitelistFromEnv().has(githubId)) {
+  if (githubId === null || !whitelist.has(githubId)) {
     return { status: "not-whitelisted" };
   }
   return { status: "authenticated", githubId };

@@ -1,12 +1,38 @@
-import { FEATURED_SLUG, getContextBySlug } from "../lib/catalog";
+"use client";
+
+import { FEATURED_SLUG } from "../lib/constants";
 
 import { HomePage } from "./home-page";
+import { useAuthenticatedContext } from "./use-authenticated-context";
 
-// The page reads live catalog data from Supabase on every request, so it must
-// not be statically prerendered at build time.
-export const dynamic = "force-dynamic";
+// The home smoke page requires an authenticated, whitelisted session: the
+// context is fetched through /api/context/[slug], never via a direct
+// service-role read.
+export default function Page() {
+  const state = useAuthenticatedContext(FEATURED_SLUG);
 
-export default async function Page() {
-  const result = await getContextBySlug(FEATURED_SLUG);
-  return <HomePage result={result} />;
+  if (state.status === "loading") {
+    return (
+      <main>
+        <p className="empty-state">正在加载…</p>
+      </main>
+    );
+  }
+  if (state.status === "unauthenticated") {
+    return (
+      <main>
+        <p className="empty-state">
+          请先 <a href="/login">登录</a> 后查看乐评语境。
+        </p>
+      </main>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <main>
+        <p className="empty-state">语境暂时无法加载。</p>
+      </main>
+    );
+  }
+  return <HomePage result={state.result} />;
 }

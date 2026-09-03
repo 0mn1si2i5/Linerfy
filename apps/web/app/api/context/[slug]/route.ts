@@ -1,18 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { bearerToken, resolveAuthState } from "../../../../lib/auth";
 import { getContextBySlug } from "../../../../lib/catalog";
-import { resolveAuthState } from "../../../../lib/auth";
 
-// The authenticated machine boundary for reading a release's context. Only a
-// whitelisted GitHub identity may read the catalog; anonymous reads are gone.
+// The single authenticated machine boundary for reading a release's context.
+// Only a whitelisted GitHub identity may read the catalog; pages and clients
+// reach the catalog exclusively through here, never via a direct service-role
+// read.
 export const dynamic = "force-dynamic";
-
-function bearerToken(request: NextRequest): string {
-  const header = request.headers.get("authorization") ?? "";
-  return header.startsWith("Bearer ")
-    ? header.slice("Bearer ".length).trim()
-    : "";
-}
 
 export async function GET(
   request: NextRequest,
@@ -20,7 +15,7 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  const token = bearerToken(request);
+  const token = bearerToken(request.headers.get("authorization"));
   if (!token) {
     return NextResponse.json(
       { error: "missing bearer token" },

@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import { requireEnv } from "./env";
 
-export const FEATURED_SLUG = "norman-fucking-rockwell";
+export { FEATURED_SLUG } from "./constants";
 
 /**
  * The outcome of reading a release's context from Supabase.
