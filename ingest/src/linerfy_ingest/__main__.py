@@ -7,15 +7,14 @@ Modes
 -----
 ``--fixture [--reset]``
     Load the offline fixture. It inserts only rows that are absent, so it can
-    never overwrite a real record; it is a pure contract check.
-``--guardian <article-path>``
-    Fetch one review from The Guardian's official Content API and upsert it (a
-    real fetch replaces an earlier placeholder). The full body is stored privately.
+    never overwrite a real record; it is a pure contract check (test-only).
 ``--summarize <release-slug>``
     Summarize a release's published review bodies into a traceable Chinese
     summary (requires ``MODEL_API_KEY``). The model call happens outside any
     transaction; the write is one atomic transaction, so a failure leaves the
     previous published summary untouched.
+``--run-enrichment``
+    Run one enrichment worker tick.
 ``--prepare-test-db``
     Apply the catalog migration to the target and mark it as the dedicated test
     database. Run once against a throwaway/test database, never production.
@@ -39,22 +38,20 @@ from .db import (
     seed,
     verify,
 )
-from .guardian import GuardianAdapter, build_context
 from .jobs import PostgresJobStore, run_once
 from .providers import ChatProvider, ModelConfig, resolve_provider
 from .summarize import read_corpus, summarize, write_summary
 
 _FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "reviews.json"
 
-# The enrichment stage handlers. Populated during integration (M8), once each
-# stage has a real consumer; until then the tick safely reports "no handler".
+# The enrichment stage handlers. Populated by R4; until then the tick safely
+# reports "no handler" rather than fabricating progress.
 _STAGE_HANDLERS: dict = {}
 
 _HELP = """usage: python -m linerfy_ingest <mode> [options]
 
 modes:
   --fixture [--reset]          load the offline fixture (insert-only, never overwrites)
-  --guardian <article-path>    fetch one review from The Guardian's Content API
   --summarize <release-slug>   summarize a release's published bodies into Chinese claims
   --run-enrichment             run one enrichment worker tick (claim + advance one job)
   --pause / --resume           set / clear the global model-generation pause
@@ -66,7 +63,6 @@ modes:
 
 examples:
   python -m linerfy_ingest --fixture
-  python -m linerfy_ingest --guardian music/2019/aug/30/lana-del-rey-norman-fucking-rockwell-review
   python -m linerfy_ingest --summarize norman-fucking-rockwell
   python -m linerfy_ingest --run-enrichment
   python -m linerfy_ingest --pause
@@ -84,18 +80,6 @@ def _run_fixture() -> None:
         apply_migration(conn)
         written = seed(conn, context, overwrite=False)
     print(f"loaded fixture; wrote {written} new rows for {context.release.title}")
-    print(verify())
-
-
-def _run_guardian(article_path: str) -> None:
-    review = GuardianAdapter(os.environ.get("GUARDIAN_API_KEY", "")).fetch_review(
-        article_path
-    )
-    context = build_context(review)
-    with connect() as conn:
-        apply_migration(conn)
-        written = seed(conn, context)
-    print(f"fetched {article_path}; wrote {written} rows")
     print(verify())
 
 
@@ -213,11 +197,6 @@ def main() -> None:
         _run_fixture()
     elif "--prepare-test-db" in args:
         _run_prepare_test_db()
-    elif "--guardian" in args:
-        index = args.index("--guardian")
-        if index + 1 >= len(args):
-            raise SystemExit("usage: python -m linerfy_ingest --guardian <article-path>")
-        _run_guardian(args[index + 1])
     elif "--summarize" in args:
         index = args.index("--summarize")
         if index + 1 >= len(args):

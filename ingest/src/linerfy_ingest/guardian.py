@@ -1,9 +1,9 @@
-"""Fetch a review from The Guardian's official Content API and load it.
+"""Legacy Guardian adapter — disabled in v1, not part of the production pipeline.
 
-The Guardian is the first real source. Access is via the official API (a free,
-non-commercial developer key), not crawling. Public metadata and a short excerpt
-are stored in the public catalog; the full body is kept private in
-``review_document_bodies``.
+The Guardian is not a cleared v1 source (the v1 sources are MusicBrainz,
+Wikidata, Cover Art Archive, CritiqueBrainz, and Wikipedia Reception). This
+adapter is retained only for reference; it is not wired into the CLI or any
+stage handler, and it must not be used for acceptance.
 """
 
 from __future__ import annotations
