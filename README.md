@@ -86,6 +86,6 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 > 以下标注依据 fresh 验证（测试 + 类型检查 + 构建 + 代码路径），不代表生产联调通过。
 
 - **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；Web 页面认证门禁（`/` 与 `/context/[slug]` 只读已认证 API，service-role 仅在服务端）；可追溯中文总结（模型边界、按 scope 原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 四阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
-- **真实 OAuth 联调待用户配置**：GitHub OAuth app + Supabase provider + 重定向 URL 白名单 + 数字 ID 白名单尚未就绪；生产 Supabase 迁移与 Vercel 部署尚未执行。代码路径已通，端到端联调需以上配置后方可验收。
+- **生产基础设施已就绪，OAuth 待复验**：生产 Supabase 迁移、Vercel Web/worker、Vault 与定时 worker 已配置；GitHub OAuth 的 PKCE 修复需部署后完成端到端登录复验。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。

@@ -1,8 +1,9 @@
 "use client";
 
-import { createClient } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+
+import { createBrowserAuthClient } from "../../../lib/browser-auth";
 
 // Exchanges the OAuth authorization code for a session. This must run in the
 // browser: the PKCE code verifier lives in localStorage, set during sign-in.
@@ -14,17 +15,21 @@ function Exchange() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const code = searchParams.get("code");
+  const oauthError =
+    searchParams.get("error_description") ?? searchParams.get("error");
   const [message, setMessage] = useState(
     !configured
       ? "GitHub OAuth 未配置。"
-      : code
-        ? "正在完成登录…"
-        : "缺少授权 code。",
+      : oauthError
+        ? `GitHub 登录失败：${oauthError}`
+        : code
+          ? "正在完成登录…"
+          : "缺少授权 code。",
   );
 
   useEffect(() => {
-    if (!configured || !code) return;
-    const supabase = createClient(supabaseUrl!, supabaseAnon!);
+    if (!configured || !code || oauthError) return;
+    const supabase = createBrowserAuthClient(supabaseUrl!, supabaseAnon!);
     void supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
       if (error) {
         setMessage(error.message);
@@ -32,7 +37,7 @@ function Exchange() {
         router.push("/");
       }
     });
-  }, [code, router]);
+  }, [code, oauthError, router]);
 
   return <p>{message}</p>;
 }

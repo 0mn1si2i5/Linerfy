@@ -11,7 +11,7 @@
  *   5. hand the session back to main, which encrypts it via safeStorage.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
 /** The subset of the Supabase session main persists (encrypted) in the store. */
@@ -47,30 +47,17 @@ export function generatePkce(): PkcePair {
   return { verifier, challenge };
 }
 
-/** A random CSRF `state` value, unique per authorization attempt. */
-export function generateState(): string {
-  return base64Url(randomBytes(16));
-}
-
-/** Constant-time compare so a mismatched OAuth `state` is rejected safely. */
-export function stateMatches(expected: string, received: string): boolean {
-  if (expected.length !== received.length) return false;
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(received));
-}
-
 /** The authorize URL the system browser is sent to. */
 export function authorizeUrl(
   config: OAuthConfig,
   redirectTo: string,
   challenge: string,
-  state: string,
 ): string {
   const params = new URLSearchParams({
     provider: config.provider,
     redirect_to: redirectTo,
     code_challenge: challenge,
     code_challenge_method: "S256",
-    state,
   });
   return `${config.url.replace(/\/+$/, "")}/auth/v1/authorize?${params}`;
 }
@@ -149,22 +136,22 @@ export interface CallbackServer {
   port: number;
   /**
    * Resolve with the authorization code once the redirect arrives, after
-   * verifying its `state` matches the value this flow generated. Rejects on
-   * timeout, a missing code, or a state mismatch (a forged redirect).
+   * validating the one-time PKCE code during exchange. Supabase owns the
+   * provider-facing OAuth `state` parameter and does not return a caller-
+   * supplied value to this loopback redirect.
    */
-  waitForCallback(expectedState: string, timeoutMs?: number): Promise<string>;
+  waitForCallback(timeoutMs?: number): Promise<string>;
   close(): void;
 }
 
 interface CallbackPayload {
   code: string;
-  state: string;
 }
 
 /**
  * A loopback HTTP server on 127.0.0.1 that captures the OAuth redirect. It
  * answers the callback with a short "you may close this tab" page, so the code
- * and state land back in the main process only.
+ * lands back in the main process only.
  */
 export function startCallbackServer(port = 0): Promise<CallbackServer> {
   return new Promise((resolve, reject) => {
@@ -178,15 +165,19 @@ export function startCallbackServer(port = 0): Promise<CallbackServer> {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (url.pathname === "/callback") {
         const code = url.searchParams.get("code");
-        const state = url.searchParams.get("state");
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        const ok = Boolean(code);
+        res.writeHead(ok ? 200 : 400, {
+          "Content-Type": "text/html; charset=utf-8",
+        });
         res.end(
           '<!doctype html><meta charset="utf-8"><title>Linerfy</title>' +
-            "<p>登录完成，可以关闭此窗口。</p>",
+            (ok
+              ? "<p>登录完成，可以关闭此窗口。</p>"
+              : "<p>登录失败，请返回 Linerfy 重试。</p>"),
         );
         if (!settled) {
           settled = true;
-          settle({ code: code ?? "", state: state ?? "" });
+          settle({ code: code ?? "" });
         }
       } else {
         res.writeHead(404);
@@ -200,7 +191,7 @@ export function startCallbackServer(port = 0): Promise<CallbackServer> {
         typeof address === "object" && address !== null ? address.port : 0;
       resolve({
         port,
-        waitForCallback(expectedState, timeoutMs = 120_000) {
+        waitForCallback(timeoutMs = 120_000) {
           return new Promise<string>((res, rej) => {
             const timer = setTimeout(() => {
               if (!settled) {
@@ -213,8 +204,6 @@ export function startCallbackServer(port = 0): Promise<CallbackServer> {
                 clearTimeout(timer);
                 if (!payload.code) {
                   rej(new Error("authorization returned no code"));
-                } else if (!stateMatches(expectedState, payload.state)) {
-                  rej(new Error("OAuth state mismatch"));
                 } else {
                   res(payload.code);
                 }
@@ -240,12 +229,11 @@ export async function performOAuthFlow(
   openExternal: (url: string) => Promise<void>,
 ): Promise<SupabaseSession> {
   const { verifier, challenge } = generatePkce();
-  const state = generateState();
   const server = await startCallbackServer(config.redirectPort ?? 4862);
   try {
     const redirectTo = `http://127.0.0.1:${server.port}/callback`;
-    await openExternal(authorizeUrl(config, redirectTo, challenge, state));
-    const code = await server.waitForCallback(state);
+    await openExternal(authorizeUrl(config, redirectTo, challenge));
+    const code = await server.waitForCallback();
     return await exchangeCodeForSession(config, code, verifier);
   } finally {
     server.close();

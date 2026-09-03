@@ -9,8 +9,8 @@
 alter table public.summary_runs add column if not exists scope text not null default '';
 alter table public.summary_runs add column if not exists published_at timestamptz;
 
--- A generation may be marked failed after a validation error, distinct from
--- draft (never validated) and candidate (validated, awaiting publish).
+-- Legacy draft/candidate/failed states remain valid for existing rows. Current
+-- workers insert only a fully validated published generation.
 alter table public.summary_runs drop constraint if exists summary_runs_status_check;
 alter table public.summary_runs add constraint summary_runs_status_check
   check (status in ('draft', 'candidate', 'published', 'superseded', 'failed'));

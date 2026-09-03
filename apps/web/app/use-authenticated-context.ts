@@ -1,8 +1,8 @@
 "use client";
 
-import { createClient } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 
+import { createBrowserAuthClient } from "../lib/browser-auth";
 import type { ContextResult } from "../lib/catalog";
 
 export type AuthContextState =
@@ -31,7 +31,7 @@ export function useAuthenticatedContext(slug: string): AuthContextState {
         setState({ status: "error", message: "GitHub OAuth 未配置" });
         return;
       }
-      const supabase = createClient(supabaseUrl, supabaseAnon);
+      const supabase = createBrowserAuthClient(supabaseUrl, supabaseAnon);
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) {

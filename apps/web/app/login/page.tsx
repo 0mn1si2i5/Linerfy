@@ -1,14 +1,17 @@
 "use client";
 
-import { createClient } from "@supabase/supabase-js";
 import { useState } from "react";
+
+import { createBrowserAuthClient } from "../../lib/browser-auth";
 
 // The OAuth sign-in page. Requires the GitHub provider to be enabled in
 // Supabase Auth and the browser env vars below to be set (see .env.example).
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const configured = Boolean(supabaseUrl && supabaseAnon);
-const supabase = configured ? createClient(supabaseUrl!, supabaseAnon!) : null;
+const supabase = configured
+  ? createBrowserAuthClient(supabaseUrl!, supabaseAnon!)
+  : null;
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);

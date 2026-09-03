@@ -16,8 +16,8 @@ alter table public.summary_runs
   add column if not exists ai_modified boolean not null default true,
   add column if not exists skipped_reason text;
 
--- The publish stage builds candidates and atomically promotes them; the old
--- inline check lacks the candidate state.
+-- Keep legacy draft/candidate states readable for existing rows. Current
+-- workers publish each scope atomically without a separate publish stage.
 alter table public.summary_runs drop constraint if exists summary_runs_status_check;
 alter table public.summary_runs add constraint summary_runs_status_check
   check (status in ('draft', 'candidate', 'published', 'superseded'));
