@@ -21,17 +21,16 @@ def stable_uuid(kind: str, slug: str) -> str:
     return str(uuid.uuid5(_NAMESPACE, f"linerfy:{kind}:{slug}"))
 
 
-def _summary_run_key(release_slug: str, summary: Summary) -> str:
-    """The same stable summary-run scope the pipeline writer uses.
+def _scope_key(summary: Summary) -> str:
+    """The stable scope a summary run belongs to, matching ``summarize._scope_key``.
 
     Source summaries are scoped per source; consensus blocks per license pool.
-    This must match ``summarize._summary_run_key`` so a seeded release and a
-    pipeline-written release resolve to the same run ids.
+    This is the dedup/regeneration key across immutable generations.
     """
     if summary.kind == "consensus":
-        return f"{release_slug}::consensus::{summary.license_pool}"
+        return f"consensus::{summary.license_pool}"
     scope = summary.source_id or summary.license_pool or "unscoped"
-    return f"{release_slug}::source::{scope}"
+    return f"source::{scope}"
 
 
 def _fingerprint(document: ReviewDocument) -> str:
@@ -161,8 +160,8 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
     claims = []
     claim_sources = []
     for summary in context.summaries:
-        run_key = _summary_run_key(context.release.id, summary)
-        summary_run_id = stable_uuid("summary", run_key)
+        scope = _scope_key(summary)
+        summary_run_id = stable_uuid("summary", f"{context.release.id}::{scope}")
         summary_runs.append(
             {
                 "id": summary_run_id,
@@ -180,10 +179,11 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
                 "attribution": summary.attribution,
                 "ai_modified": summary.ai_modified,
                 "skipped_reason": summary.skipped_reason,
+                "scope": scope,
             }
         )
         for order, claim in enumerate(summary.claims):
-            claim_id = stable_uuid("claim", f"{run_key}:{order}")
+            claim_id = stable_uuid("claim", f"{context.release.id}::{scope}:{order}")
             claims.append(
                 {
                     "id": claim_id,

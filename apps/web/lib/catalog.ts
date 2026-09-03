@@ -74,7 +74,11 @@ export async function getContextBySlug(slug: string): Promise<ContextResult> {
     supabase.from("genres").select("*").eq("release_id", releaseId),
     supabase.from("review_sources").select("*"),
     supabase.from("review_documents").select("*").eq("release_id", releaseId),
-    supabase.from("summary_runs").select("*").eq("release_id", releaseId),
+    supabase
+      .from("summary_runs")
+      .select("*")
+      .eq("release_id", releaseId)
+      .eq("status", "published"),
     supabase.from("recordings").select("*").eq("release_id", releaseId),
   ]);
 

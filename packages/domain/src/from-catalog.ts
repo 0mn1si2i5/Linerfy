@@ -72,6 +72,10 @@ export interface SummaryRunRow {
   attribution: string;
   ai_modified: boolean;
   skipped_reason: string | null;
+  // Immutable-generation columns (added by the R4 migration). The reader only
+  // depends on `status`, so these are optional on the read-side row shape.
+  scope?: string;
+  published_at?: string | null;
 }
 
 export interface ClaimRow {
@@ -172,11 +176,12 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
         .filter((slug): slug is string => Boolean(slug)),
     }));
 
-  // Every summary run for this release — never `.find()` a single one, which
-  // would silently drop the other license pools. Source summaries and consensus
-  // blocks are read as separate groups.
+  // Only the current published generation per scope is public. Immutable
+  // generations mean candidate/superseded/failed rows coexist with the one
+  // published row; a half-built or superseded generation must never leak.
+  // Never `.find()` a single run — that would silently drop other license pools.
   const releaseSummaries = catalog.summary_runs.filter(
-    (r) => r.release_id === release.id,
+    (r) => r.release_id === release.id && r.status === "published",
   );
   const publicationBySlug = new Map(
     catalog.review_sources.map((s) => [s.slug, s.publication]),

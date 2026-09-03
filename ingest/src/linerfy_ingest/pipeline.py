@@ -139,26 +139,33 @@ def _group_by_pool(documents: list[StoredDocument]) -> dict[str, list[StoredDocu
     return grouped
 
 
-def _existing_source_summaries(conn, release_slug: str) -> set[str]:
+def _existing_source_summaries(conn, release_slug: str) -> dict[str, str]:
+    """Map source id -> corpus_hash of the current (candidate|published) summary.
+
+    A source is only treated as "done" when its persisted generation was built
+    from the same corpus hash, so a changed corpus triggers regeneration rather
+    than a permanent skip.
+    """
     rows = conn.execute(
-        "SELECT source_id FROM public.summary_runs s "
+        "SELECT source_id, corpus_hash FROM public.summary_runs s "
         "JOIN public.releases r ON r.id = s.release_id "
         "WHERE r.slug = %s AND s.summary_kind = 'source' "
         "AND s.status IN ('candidate', 'published')",
         (release_slug,),
     ).fetchall()
-    return {row[0] for row in rows if row[0]}
+    return {row[0]: row[1] for row in rows if row[0]}
 
 
-def _existing_consensus_pools(conn, release_slug: str) -> set[str]:
+def _existing_consensus_pools(conn, release_slug: str) -> dict[str, str]:
+    """Map license pool -> corpus_hash of the current (candidate|published) block."""
     rows = conn.execute(
-        "SELECT license_pool FROM public.summary_runs s "
+        "SELECT license_pool, corpus_hash FROM public.summary_runs s "
         "JOIN public.releases r ON r.id = s.release_id "
         "WHERE r.slug = %s AND s.summary_kind = 'consensus' "
         "AND s.status IN ('candidate', 'published')",
         (release_slug,),
     ).fetchall()
-    return {row[0] for row in rows}
+    return {row[0]: row[1] for row in rows}
 
 
 def _build_source_summaries(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> bool:
@@ -171,7 +178,7 @@ def _build_source_summaries(job: EnrichmentJob, lease_id: str, deps: PipelineDep
         raise JobUnavailable("no persisted documents to summarize")
     by_source = _group_by_source(documents)
     for source_id, source_documents in by_source.items():
-        if source_id in done:
+        if done.get(source_id) == corpus_hash(_as_corpus(source_documents)):
             continue
         # One bounded model call per source, outside any transaction. Renew the
         # lease first so a long model call cannot be reaped mid-stage.
@@ -205,7 +212,8 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
         raise JobUnavailable("no persisted documents for consensus")
     by_pool = _group_by_pool(documents)
     for pool, pool_documents in by_pool.items():
-        if pool in done:
+        pool_hash = corpus_hash(_as_corpus(pool_documents))
+        if done.get(pool) == pool_hash:
             continue
         distinct_sources = {d.source_id for d in pool_documents}
         first = pool_documents[0]
@@ -218,6 +226,7 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
                     license_pool=pool,
                     license_url=first.license_url,
                     attribution=attribution,
+                    corpus_hash=pool_hash,
                 )
         else:
             # Renew the lease before the model call so it cannot be reaped.
@@ -253,7 +262,7 @@ def _publish(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> bool:
     if not candidates:
         raise RuntimeError("no candidate summaries to publish")
     with connect(autocommit=False) as conn:
-        publish(conn, slug)
+        publish(conn, slug, job_id=job.id, lease_id=lease_id)
     return True
 
 

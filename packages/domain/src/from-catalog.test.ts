@@ -427,4 +427,61 @@ describe("assembleMusicContext", () => {
     expect(skipped?.claims).toHaveLength(0);
     expect(skipped?.sourceIds).toEqual(["wikipedia"]);
   });
+
+  it("returns only published summary generations", () => {
+    // A candidate (in-flight regeneration) and a superseded (old published)
+    // generation for the same scopes must never reach the public read path;
+    // only the one current published generation per scope is returned.
+    const withNonPublished: CatalogRows = {
+      ...catalog,
+      summary_runs: [
+        ...catalog.summary_runs,
+        {
+          id: "sr-candidate",
+          release_id: "r1",
+          model: "m",
+          locale: "zh-CN",
+          corpus_hash: "newer",
+          generated_at: "2026-09-03T00:00:00Z",
+          status: "candidate",
+          summary_kind: "source",
+          license_pool: "proprietary",
+          license_url: "https://pitchfork.com/contact",
+          source_id: "pitchfork",
+          attribution: "Pitchfork — proprietary",
+          ai_modified: true,
+          skipped_reason: null,
+          scope: "source::pitchfork",
+          published_at: null,
+        },
+        {
+          id: "sr-superseded",
+          release_id: "r1",
+          model: "m",
+          locale: "zh-CN",
+          corpus_hash: "older",
+          generated_at: "2026-09-01T00:00:00Z",
+          status: "superseded",
+          summary_kind: "consensus",
+          license_pool: "proprietary",
+          license_url: "https://pitchfork.com/contact",
+          source_id: null,
+          attribution: "Pitchfork、The Guardian — proprietary",
+          ai_modified: true,
+          skipped_reason: null,
+          scope: "consensus::proprietary",
+          published_at: "2026-09-01T00:00:00Z",
+        },
+      ],
+    };
+
+    const context = assembleMusicContext(withNonPublished);
+
+    expect(context.sourceSummaries.map((s) => s.source.id)).toEqual([
+      "pitchfork",
+      "guardian",
+    ]);
+    expect(context.consensusBlocks).toHaveLength(1);
+    expect(context.consensusBlocks[0]?.licensePool).toBe("proprietary");
+  });
 });
