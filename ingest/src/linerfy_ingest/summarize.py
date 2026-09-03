@@ -140,12 +140,19 @@ def summarize(
     prompt_version: str = "summarize-v2",
     generated_at: datetime | None = None,
     chat,
+    kind: str = "source",
+    license_pool: str = "",
+    source_id: str | None = None,
+    attribution: str = "",
+    ai_modified: bool = True,
 ) -> Summary:
     """Summarize a corpus into a validated ``Summary``.
 
     ``chat`` is an injected provider callable with signature
     ``(messages) -> ChatResult``; the provider (OpenAI-compatible or Anthropic)
-    is resolved by the caller, never here.
+    is resolved by the caller, never here. The contract fields (``kind``,
+    ``license_pool``, ``source_id``, ``attribution``) are filled by the caller
+    from the source policy so a summary is always tied to its license pool.
     """
     if not corpus:
         raise ValueError("summarize requires a non-empty corpus")
@@ -165,6 +172,11 @@ def summarize(
         generated_at=generated_at or datetime.now(UTC),
         corpus_hash=corpus_hash(corpus),
         claims=claims,
+        kind=kind,
+        license_pool=license_pool,
+        source_id=source_id,
+        attribution=attribution,
+        ai_modified=ai_modified,
     )
 
 
@@ -180,33 +192,91 @@ def read_corpus(conn, release_slug: str) -> list[CorpusDocument]:
     return [CorpusDocument(id=slug, text=content) for slug, content in rows]
 
 
-def write_summary(
-    conn, release_slug: str, summary: Summary, *, pool: str | None = None
-) -> int:
-    """Replace a release's summary atomically: the run, its claims, and their
-    citations are written in one transaction, so a failure on any row leaves the
-    previously published summary exactly as it was.
+@dataclass(frozen=True)
+class StoredDocument:
+    """A persisted review document with the source/license facts a stage needs."""
 
-    ``pool`` scopes the run to a license pool: each pool has its own summary
-    run, so incompatible licenses never share a run.
+    id: str
+    source_id: str
+    license_id: str
+    license_url: str
+    publication: str
+    content: str
 
-    ``conn`` must be in transactional (non-autocommit) mode so the block below
-    actually commits/rolls back as a unit.
+
+def read_stored_documents(conn, release_slug: str) -> list[StoredDocument]:
+    """Read a release's persisted published documents with source + license.
+
+    This is the durable input to source-summary and consensus generation: a
+    stage re-running after a crash reads the same corpus it wrote earlier and
+    never re-fetches from MusicBrainz / CritiqueBrainz / Wikipedia.
     """
     release_id = uuid.UUID(stable_uuid("release", release_slug))
-    run_key = f"{release_slug}::{pool}" if pool else release_slug
+    rows = conn.execute(
+        "SELECT d.slug, s.slug, p.license_id, p.license_url, s.publication, "
+        "COALESCE(b.content, d.title) "
+        "FROM public.review_documents d "
+        "JOIN public.review_sources s ON s.id = d.source_id "
+        "JOIN public.source_policies p ON p.source_id = s.id "
+        "LEFT JOIN public.review_document_bodies b ON b.document_id = d.id "
+        "WHERE d.release_id = %s AND d.status = 'published'",
+        (release_id,),
+    ).fetchall()
+    return [
+        StoredDocument(
+            id=row[0],
+            source_id=row[1],
+            license_id=row[2],
+            license_url=row[3],
+            publication=row[4],
+            content=row[5] or "",
+        )
+        for row in rows
+    ]
+
+
+def _summary_run_key(release_slug: str, summary: Summary) -> str:
+    """A stable, unique scope for a summary run.
+
+    Source summaries are scoped per source; consensus blocks per license pool.
+    """
+    if summary.kind == "consensus":
+        return f"{release_slug}::consensus::{summary.license_pool}"
+    scope = summary.source_id or summary.license_pool or "unscoped"
+    return f"{release_slug}::source::{scope}"
+
+
+def write_summary(
+    conn, release_slug: str, summary: Summary, *, status: str = "candidate"
+) -> int:
+    """Replace one summary run atomically: the run, its claims, and their
+    citations are written in one transaction, so a failure on any row leaves the
+    previous run exactly as it was.
+
+    ``status`` is ``candidate`` during the build stages and flipped to
+    ``published`` by ``publish``, so a half-built summary is never public.
+
+    ``conn`` must be in transactional (non-autocommit) mode.
+    """
+    release_id = uuid.UUID(stable_uuid("release", release_slug))
+    run_key = _summary_run_key(release_slug, summary)
     summary_run_id = uuid.UUID(stable_uuid("summary", run_key))
     written = 0
 
     with conn.transaction():
         cursor = conn.execute(
             "INSERT INTO public.summary_runs "
-            "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, status) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+            "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
+            " status, summary_kind, license_pool, source_id, attribution, ai_modified, "
+            " skipped_reason) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (id) DO UPDATE SET model=EXCLUDED.model, "
             "prompt_version=EXCLUDED.prompt_version, locale=EXCLUDED.locale, "
             "corpus_hash=EXCLUDED.corpus_hash, generated_at=EXCLUDED.generated_at, "
-            "status=EXCLUDED.status",
+            "status=EXCLUDED.status, summary_kind=EXCLUDED.summary_kind, "
+            "license_pool=EXCLUDED.license_pool, source_id=EXCLUDED.source_id, "
+            "attribution=EXCLUDED.attribution, ai_modified=EXCLUDED.ai_modified, "
+            "skipped_reason=EXCLUDED.skipped_reason",
             (
                 summary_run_id,
                 release_id,
@@ -215,7 +285,13 @@ def write_summary(
                 summary.locale,
                 summary.corpus_hash,
                 summary.generated_at,
-                "published",
+                status,
+                summary.kind,
+                summary.license_pool,
+                summary.source_id,
+                summary.attribution,
+                summary.ai_modified,
+                summary.skipped_reason,
             ),
         )
         written += cursor.rowcount
@@ -246,4 +322,88 @@ def write_summary(
                 )
                 written += cursor.rowcount
 
+    return written
+
+
+def write_consensus_skipped(
+    conn,
+    release_slug: str,
+    *,
+    license_pool: str,
+    attribution: str,
+    reason: str = "insufficient-sources",
+    status: str = "candidate",
+) -> int:
+    """Record that a pool's consensus was legitimately not generated (fewer than
+    two distinct sources). Written with no claims; it replaces any earlier
+    consensus for the same pool."""
+    release_id = uuid.UUID(stable_uuid("release", release_slug))
+    run_key = f"{release_slug}::consensus::{license_pool}"
+    summary_run_id = uuid.UUID(stable_uuid("summary", run_key))
+    with conn.transaction():
+        cursor = conn.execute(
+            "INSERT INTO public.summary_runs "
+            "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
+            " status, summary_kind, license_pool, source_id, attribution, ai_modified, "
+            " skipped_reason) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, "
+            "summary_kind=EXCLUDED.summary_kind, license_pool=EXCLUDED.license_pool, "
+            "source_id=EXCLUDED.source_id, attribution=EXCLUDED.attribution, "
+            "ai_modified=EXCLUDED.ai_modified, skipped_reason=EXCLUDED.skipped_reason",
+            (
+                summary_run_id,
+                release_id,
+                "",
+                "consensus-skip",
+                "zh-CN",
+                "",
+                datetime.now(UTC),
+                status,
+                "consensus",
+                license_pool,
+                None,
+                attribution,
+                True,
+                reason,
+            ),
+        )
+        written = cursor.rowcount
+        cursor = conn.execute(
+            "DELETE FROM public.claims WHERE summary_run_id = %s", (summary_run_id,)
+        )
+        written += cursor.rowcount
+    return written
+
+
+def publish(conn, release_slug: str) -> int:
+    """Atomically promote the candidate set and supersede the prior published set.
+
+    The publish stage validates the candidates first; this flips every candidate
+    (source summaries and any consensus, including a legitimately skipped one)
+    to ``published`` and demotes the old published runs to ``superseded`` in one
+    transaction. A release never appears half-published.
+    """
+    release_id = uuid.UUID(stable_uuid("release", release_slug))
+    with conn.transaction():
+        candidate_ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT id FROM public.summary_runs "
+                "WHERE release_id = %s AND status = 'candidate'",
+                (release_id,),
+            ).fetchall()
+        ]
+        if not candidate_ids:
+            raise RuntimeError("publish requires a candidate set")
+        written = conn.execute(
+            "UPDATE public.summary_runs SET status = 'published' "
+            "WHERE release_id = %s AND status = 'candidate'",
+            (release_id,),
+        ).rowcount
+        written += conn.execute(
+            "UPDATE public.summary_runs SET status = 'superseded' "
+            "WHERE release_id = %s AND status = 'published' AND NOT (id = ANY(%s::uuid[]))",
+            (release_id, candidate_ids),
+        ).rowcount
     return written

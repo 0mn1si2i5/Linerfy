@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from linerfy_ingest.jobs import (
-    MAX_RETRIES,
+    ClaimedJob,
     EnrichmentJob,
-    failure_outcome,
+    StaleLease,
     next_stage,
     run_job,
     run_once,
@@ -13,9 +13,10 @@ from linerfy_ingest.jobs import (
 
 
 class FakeStore:
-    def __init__(self, jobs=None, *, paused=False):
+    def __init__(self, jobs=None, *, paused=False, stale_commit=False):
         self.jobs = list(jobs or [])
         self.paused_flag = paused
+        self.stale_commit = stale_commit
         self.reaped = 0
         self.claim_skips: list[bool] = []
         self.actions: list[tuple] = []
@@ -23,22 +24,26 @@ class FakeStore:
     def paused(self) -> bool:
         return self.paused_flag
 
-    def reap_timeouts(self) -> int:
+    def reap_and_claim(self, *, skip_model_stages=False):
         self.reaped += 1
-        return 0
-
-    def claim_next(self, *, skip_model_stages=False):
         self.claim_skips.append(skip_model_stages)
-        return self.jobs.pop(0) if self.jobs else None
+        if not self.jobs:
+            return None
+        return ClaimedJob(job=self.jobs.pop(0), lease_id="lease-1")
 
-    def advance(self, job, *, stage, state):
-        self.actions.append(("advance", stage, state))
+    def commit(self, job_id, lease_id, *, stage, state):
+        if self.stale_commit:
+            raise StaleLease("stale")
+        self.actions.append(("commit", stage, state))
 
-    def fail(self, job, error):
+    def fail(self, job_id, lease_id, error):
         self.actions.append(("fail", error))
 
-    def set_corpus_hash(self, job, corpus_hash):
+    def set_corpus_hash(self, job_id, lease_id, corpus_hash):
         self.actions.append(("corpus_hash", corpus_hash))
+
+    def set_resolution(self, job_id, lease_id, release_group_id, status):
+        self.actions.append(("resolution", release_group_id, status))
 
 
 def _job(stage, retry_count=0):
@@ -53,51 +58,63 @@ def test_next_stage_walks_the_pipeline() -> None:
     assert next_stage("publish") is None
 
 
-def test_failure_outcome_retries_then_fails() -> None:
-    assert failure_outcome(_job("resolve_entity", 0)) == "queued"
-    assert failure_outcome(_job("resolve_entity", MAX_RETRIES - 1)) == "queued"
-    assert failure_outcome(_job("resolve_entity", MAX_RETRIES)) == "failed"
-
-
 def test_run_job_advances_to_next_stage() -> None:
     store = FakeStore()
-    run_job(_job("resolve_entity"), {"resolve_entity": lambda job: None}, store)
-    assert store.actions == [("advance", "fetch_sources", "queued")]
+    run_job(_job("resolve_entity"), "lease-1", {"resolve_entity": lambda j, lease: True}, store)
+    assert store.actions == [("commit", "fetch_sources", "queued")]
 
 
 def test_run_job_completes_after_publish() -> None:
     store = FakeStore()
-    run_job(_job("publish"), {"publish": lambda job: None}, store)
-    assert store.actions == [("advance", None, "ready")]
+    run_job(_job("publish"), "lease-1", {"publish": lambda j, lease: True}, store)
+    assert store.actions == [("commit", None, "ready")]
+
+
+def test_run_job_does_not_advance_when_handler_requeues() -> None:
+    store = FakeStore()
+    run_job(
+        _job("build_source_summaries"),
+        "lease-1",
+        {"build_source_summaries": lambda j, lease: False},
+        store,
+    )
+    assert store.actions == []
 
 
 def test_run_job_fails_when_handler_raises() -> None:
     store = FakeStore()
 
-    def boom(job):
+    def boom(job, lease_id):
         raise RuntimeError("upstream down")
 
-    run_job(_job("fetch_sources"), {"fetch_sources": boom}, store)
+    run_job(_job("fetch_sources"), "lease-1", {"fetch_sources": boom}, store)
     assert store.actions == [("fail", "upstream down")]
 
 
 def test_run_job_fails_without_a_handler() -> None:
     store = FakeStore()
-    run_job(_job("resolve_entity"), {}, store)
+    run_job(_job("resolve_entity"), "lease-1", {}, store)
     assert store.actions == [("fail", "no handler for stage resolve_entity")]
+
+
+def test_run_job_swallows_stale_lease() -> None:
+    store = FakeStore(stale_commit=True)
+    run_job(_job("resolve_entity"), "lease-1", {"resolve_entity": lambda j, lease: True}, store)
+    # A stale commit must not be treated as a stage failure.
+    assert store.actions == []
 
 
 def test_run_once_reaps_then_claims_one_job() -> None:
     store = FakeStore([_job("resolve_entity")])
-    processed = run_once(store, {"resolve_entity": lambda job: None})
+    processed = run_once(store, {"resolve_entity": lambda j, lease: True})
     assert store.reaped == 1
     assert processed == 1
-    assert store.actions == [("advance", "fetch_sources", "queued")]
+    assert store.actions == [("commit", "fetch_sources", "queued")]
 
 
 def test_run_once_skips_model_stages_when_paused() -> None:
     store = FakeStore([_job("resolve_entity")], paused=True)
-    run_once(store, {"resolve_entity": lambda job: None})
+    run_once(store, {"resolve_entity": lambda j, lease: True})
     assert store.claim_skips == [True]
 
 

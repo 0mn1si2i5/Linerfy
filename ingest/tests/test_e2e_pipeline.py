@@ -1,11 +1,10 @@
 """Real end-to-end pipeline test against the marked test database.
 
 This is the closest to a live E2E that can run unattended. The real job store,
-seed, SQL, and five-stage state machine run against a real Postgres; only the
-network boundary is stubbed — the MusicBrainz / CritiqueBrainz / Wikipedia HTTP
-clients and the model — because those are external, flaky, and (for the model)
-metered. Everything from ``resolve_entity`` to ``publish`` is the real code
-path, including the license-pool-aware summary write and the publish guard.
+lease CAS, seed, SQL, and five-stage state machine run against a real Postgres;
+only the network boundary is stubbed — the MusicBrainz / CritiqueBrainz /
+Wikipedia HTTP clients and the model — because those are external, flaky, and
+(for the model) metered.
 
 Gated exactly like the other DB integration tests: it runs only with
 ``DATABASE_URL`` and ``LINERFY_DB_TESTS_ALLOWED=1`` set, and only against a
@@ -92,56 +91,75 @@ def _chat(_messages):
     return ChatResult(content=content, finish_reason="stop")
 
 
+def _deps(store, musicbrainz) -> PipelineDeps:
+    return PipelineDeps(
+        store=store,
+        musicbrainz=musicbrainz,
+        critiquebrainz=_FakeCB(),
+        wikipedia=_FakeWiki(),
+        model="e2e-model",
+        chat=_chat,
+    )
+
+
+def _cleanup(fingerprints: list[str]) -> None:
+    with connect() as conn:
+        for fp in fingerprints:
+            conn.execute(
+                "DELETE FROM public.enrichment_jobs WHERE entity_id = %s", (fp,)
+            )
+        conn.execute("DELETE FROM public.artists WHERE slug = %s", ("test-artist",))
+        conn.execute("DELETE FROM public.review_sources WHERE slug = %s", ("wikipedia",))
+
+
+def _run_to_completion(store, handlers) -> None:
+    # One bounded work unit per run_once; loop until the queue is empty, with a
+    # bound to catch a regression that would otherwise spin forever.
+    for _ in range(40):
+        if run_once(store, handlers) == 0:
+            return
+    raise AssertionError("pipeline did not reach an idle state")
+
+
 def test_pipeline_runs_resolve_to_publish_against_test_db() -> None:
-    with connect(autocommit=False) as conn:
+    with connect() as conn:
         skip_unless_test_db(conn)
-        conn.execute(
-            "INSERT INTO public.enrichment_jobs "
-            "(entity_id, entity_kind, stage, state, payload) VALUES (%s,%s,%s,%s,%s)",
-            (
-                _FINGERPRINT,
-                "release",
-                "resolve_entity",
-                "queued",
-                '{"provider":"spotify","title":"T","artist":"Test Artist",'
-                '"album":"Test Album","state":"playing"}',
-            ),
-        )
 
-        store = PostgresJobStore(conn)
-        deps = PipelineDeps(
-            store=store,
-            conn=conn,
-            musicbrainz=_FakeMB(),
-            critiquebrainz=_FakeCB(),
-            wikipedia=_FakeWiki(),
-            model="e2e-model",
-            chat=_chat,
-        )
-        handlers = build_handlers(deps)
+    try:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO public.enrichment_jobs "
+                "(entity_id, entity_kind, stage, state, payload) VALUES (%s,%s,%s,%s,%s)",
+                (
+                    _FINGERPRINT,
+                    "release",
+                    "resolve_entity",
+                    "queued",
+                    '{"provider":"spotify","title":"T","artist":"Test Artist",'
+                    '"album":"Test Album","state":"playing"}',
+                ),
+            )
 
-        # One stage per run_once; the loop bound guards against a regression
-        # that would otherwise spin forever.
-        for _ in range(6):
-            if run_once(store, handlers) == 0:
-                break
+        store = PostgresJobStore()
+        _run_to_completion(store, build_handlers(_deps(store, _FakeMB())))
 
-        state = conn.execute(
-            "SELECT state, stage FROM public.enrichment_jobs WHERE entity_id = %s",
-            (_FINGERPRINT,),
-        ).fetchone()
-        assert state is not None and state[0] == "ready", f"job not ready: {state}"
+        with connect() as conn:
+            state = conn.execute(
+                "SELECT state, stage, resolution_status FROM public.enrichment_jobs "
+                "WHERE entity_id = %s",
+                (_FINGERPRINT,),
+            ).fetchone()
+            assert state is not None and state[0] == "ready", f"job not ready: {state}"
 
-        published = conn.execute(
-            "SELECT count(*) FROM public.summary_runs s "
-            "JOIN public.releases r ON r.id = s.release_id "
-            "WHERE r.slug = %s AND s.status = 'published'",
-            (_SLUG,),
-        ).fetchone()[0]
-        assert published == 1
-
-        # No commit on the transaction: the test DB is left untouched.
-        conn.rollback()
+            published = conn.execute(
+                "SELECT count(*) FROM public.summary_runs s "
+                "JOIN public.releases r ON r.id = s.release_id "
+                "WHERE r.slug = %s AND s.status = 'published'",
+                (_SLUG,),
+            ).fetchone()[0]
+            assert published == 1
+    finally:
+        _cleanup([_FINGERPRINT])
 
 
 def test_pipeline_marks_unresolvable_entity_unavailable() -> None:
@@ -149,36 +167,32 @@ def test_pipeline_marks_unresolvable_entity_unavailable() -> None:
         def search_release_groups(self, artist, album):
             return []
 
-    with connect(autocommit=False) as conn:
+    with connect() as conn:
         skip_unless_test_db(conn)
-        conn.execute(
-            "INSERT INTO public.enrichment_jobs "
-            "(entity_id, entity_kind, stage, state, payload) VALUES (%s,%s,%s,%s,%s)",
-            (
-                "e2e-unresolvable",
-                "release",
-                "resolve_entity",
-                "queued",
-                '{"provider":"spotify","title":"T","artist":"Unknown","album":"None"}',
-            ),
-        )
 
-        store = PostgresJobStore(conn)
-        deps = PipelineDeps(
-            store=store,
-            conn=conn,
-            musicbrainz=_NoMatch(),
-            critiquebrainz=_FakeCB(),
-            wikipedia=_FakeWiki(),
-            model="e2e-model",
-            chat=_chat,
-        )
-        run_once(store, build_handlers(deps))
+    try:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO public.enrichment_jobs "
+                "(entity_id, entity_kind, stage, state, payload) VALUES (%s,%s,%s,%s,%s)",
+                (
+                    "e2e-unresolvable",
+                    "release",
+                    "resolve_entity",
+                    "queued",
+                    '{"provider":"spotify","title":"T","artist":"Unknown","album":"None"}',
+                ),
+            )
 
-        state = conn.execute(
-            "SELECT state FROM public.enrichment_jobs WHERE entity_id = %s",
-            ("e2e-unresolvable",),
-        ).fetchone()
-        assert state is not None and state[0] == "unavailable"
+        store = PostgresJobStore()
+        run_once(store, build_handlers(_deps(store, _NoMatch())))
 
-        conn.rollback()
+        with connect() as conn:
+            state = conn.execute(
+                "SELECT state, resolution_status FROM public.enrichment_jobs "
+                "WHERE entity_id = %s",
+                ("e2e-unresolvable",),
+            ).fetchone()
+            assert state is not None and state[0] == "unavailable"
+    finally:
+        _cleanup(["e2e-unresolvable"])

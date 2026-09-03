@@ -148,7 +148,12 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
     claims = []
     claim_sources = []
     if context.summary is not None:
-        summary_run_id = stable_uuid("summary", context.release.id)
+        scope = (
+            context.summary.source_id
+            or context.summary.license_pool
+            or context.summary.kind
+        )
+        summary_run_id = stable_uuid("summary", f"{context.release.id}::{scope}")
         summary_runs = [
             {
                 "id": summary_run_id,
@@ -159,6 +164,12 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
                 "corpus_hash": context.summary.corpus_hash,
                 "generated_at": context.summary.generated_at.isoformat(),
                 "status": "published",
+                "summary_kind": context.summary.kind,
+                "license_pool": context.summary.license_pool,
+                "source_id": context.summary.source_id,
+                "attribution": context.summary.attribution,
+                "ai_modified": context.summary.ai_modified,
+                "skipped_reason": context.summary.skipped_reason,
             }
         ]
         for order, claim in enumerate(context.summary.claims):

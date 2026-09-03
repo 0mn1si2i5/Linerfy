@@ -89,7 +89,7 @@ def _run_prepare_test_db() -> None:
     print("prepared test database: applied migration and marked it")
 
 
-def _build_enrichment_handlers(conn):
+def _build_enrichment_handlers():
     """Construct the real five-stage handlers from live dependencies.
 
     The model provider is resolved lazily on the first model call, so resolve
@@ -109,8 +109,7 @@ def _build_enrichment_handlers(conn):
         return result
 
     deps = PipelineDeps(
-        store=PostgresJobStore(conn),
-        conn=conn,
+        store=PostgresJobStore(),
         musicbrainz=MusicBrainzAdapter(),
         critiquebrainz=CritiqueBrainzAdapter(),
         wikipedia=WikipediaAdapter(),
@@ -121,11 +120,13 @@ def _build_enrichment_handlers(conn):
 
 
 def _run_enrichment() -> None:
-    """Run one worker tick: reap timeouts, claim one job, run its stage."""
-    with connect(autocommit=False) as conn:
-        handlers = _build_enrichment_handlers(conn)
-        processed = run_once(PostgresJobStore(conn), handlers)
-        conn.commit()
+    """Run one worker tick: reap leases, claim one job, run one bounded unit.
+
+    External HTTP and model calls happen outside any database transaction; each
+    job operation is its own short transaction guarded by a lease CAS.
+    """
+    handlers = _build_enrichment_handlers()
+    processed = run_once(PostgresJobStore(), handlers)
     print(f"enrichment tick: processed {processed} job(s)")
 
 
@@ -207,7 +208,7 @@ def _run_summarize(release_slug: str) -> None:
         raise SystemExit(f"refusing real model call: {exc}") from exc
 
     with connect(autocommit=False) as conn:
-        written = write_summary(conn, release_slug, summary)
+        written = write_summary(conn, release_slug, summary, status="published")
 
     print(
         f"summarized {release_slug}: {len(summary.claims)} claims "

@@ -1,19 +1,29 @@
-"""Persistent enrichment job lifecycle.
+"""Persistent enrichment job lifecycle with short, atomic leases.
 
 An enrichment job walks a release through five idempotent stages --
 ``resolve_entity -> fetch_sources -> build_source_summaries -> build_consensus
--> publish`` -- each advancing atomically so a worker crash or timeout can never
-leave the catalog half-written. Jobs are claimed with ``FOR UPDATE SKIP LOCKED``
-so concurrent workers never process the same row, retried at most
-``MAX_RETRIES`` times, and model stages are gated behind a global pause flag.
+-> publish``. A worker performs external HTTP and model work OUTSIDE any
+database transaction, so the job row is never locked across a network call.
+
+Claiming writes a fresh ``lease_id`` + ``lease_expires_at`` in one short
+transaction; committing a result is a compare-and-set on ``(id, lease_id)``, so
+a stale worker whose lease was reaped can never overwrite a newer claim. Jobs
+are claimed with ``FOR UPDATE SKIP LOCKED`` so concurrent workers never process
+the same row, retried at most ``MAX_RETRIES`` times, and model stages are gated
+behind a global pause flag.
 """
 
 from __future__ import annotations
 
+import uuid
+from contextlib import suppress
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import psycopg
 from pydantic import BaseModel, Field
+
+from .db import connect
 
 Stage = Literal[
     "resolve_entity",
@@ -36,7 +46,7 @@ MODEL_STAGES: frozenset[Stage] = frozenset(
     {"build_source_summaries", "build_consensus"}
 )
 MAX_RETRIES = 2
-STAGE_TIMEOUT_SECONDS = 120
+LEASE_SECONDS = 120
 PAUSE_FLAG = "model_generation_paused"
 
 
@@ -62,36 +72,53 @@ class EnrichmentJob(BaseModel):
     resolution_status: str = "pending"
 
 
+@dataclass(frozen=True)
+class ClaimedJob:
+    """A job plus the fresh lease that owns it, needed for compare-and-set."""
+
+    job: EnrichmentJob
+    lease_id: str
+
+
+class StaleLease(Exception):
+    """A commit was refused because the lease no longer matches the row."""
+
+
+class JobUnavailable(Exception):
+    """Raised by a stage to mark a job terminally unavailable (no retry)."""
+
+
 class JobStore(Protocol):
-    """The queue operations the worker performs, injectable for tests."""
+    """Queue operations the worker performs, each a short transaction."""
 
     def paused(self) -> bool: ...
 
-    def reap_timeouts(self) -> int: ...
+    def reap_and_claim(
+        self, *, skip_model_stages: bool = False
+    ) -> ClaimedJob | None: ...
 
-    def claim_next(self, *, skip_model_stages: bool = False) -> EnrichmentJob | None: ...
-
-    def advance(
-        self, job: EnrichmentJob, *, stage: Stage | None, state: JobState
+    def commit(
+        self,
+        job_id: str,
+        lease_id: str,
+        *,
+        stage: Stage | None,
+        state: JobState,
     ) -> None: ...
 
-    def fail(self, job: EnrichmentJob, error: str) -> None: ...
+    def fail(self, job_id: str, lease_id: str, error: str) -> None: ...
 
-    def set_corpus_hash(self, job: EnrichmentJob, corpus_hash: str) -> None: ...
+    def set_corpus_hash(self, job_id: str, lease_id: str, corpus_hash: str) -> None: ...
 
     def set_resolution(
-        self, job: EnrichmentJob, release_group_id: str | None, status: str
+        self, job_id: str, lease_id: str, release_group_id: str | None, status: str
     ) -> None: ...
 
 
 class StageHandler(Protocol):
     """One pipeline stage; raising marks the job failed (and retryable)."""
 
-    def __call__(self, job: EnrichmentJob) -> None: ...
-
-
-class JobUnavailable(Exception):
-    """Raised by a stage to mark a job terminally unavailable (no retry)."""
+    def __call__(self, job: EnrichmentJob, lease_id: str) -> None: ...
 
 
 def next_stage(stage: Stage) -> Stage | None:
@@ -100,79 +127,101 @@ def next_stage(stage: Stage) -> Stage | None:
     return STAGES[index + 1] if index + 1 < len(STAGES) else None
 
 
-def failure_outcome(job: EnrichmentJob) -> JobState:
-    """Whether a failed job is retried (queued) or exhausted (failed)."""
-    return "queued" if job.retry_count < MAX_RETRIES else "failed"
-
-
 def run_job(
     job: EnrichmentJob,
+    lease_id: str,
     handlers: dict[Stage, StageHandler],
     store: JobStore,
 ) -> None:
     """Run a claimed job's current stage and advance it, idempotently."""
     handler = handlers.get(job.stage)
     if handler is None:
-        store.fail(job, f"no handler for stage {job.stage}")
+        _fail(store, job.id, lease_id, f"no handler for stage {job.stage}")
         return
     try:
-        handler(job)
+        advance = handler(job, lease_id)
     except JobUnavailable:
-        # Terminal: the entity cannot be resolved; no retry, no pollution.
-        store.advance(job, stage=None, state="unavailable")
+        _commit(store, job.id, lease_id, stage=None, state="unavailable")
         return
+    except StaleLease:
+        return  # another worker took over this job; do nothing
     except Exception as exc:  # the job boundary absorbs stage errors for retry
-        store.fail(job, str(exc))
+        _fail(store, job.id, lease_id, str(exc))
         return
+    if not advance:
+        return  # the handler re-queued itself; do not advance again
     following = next_stage(job.stage)
-    if following is None:
-        store.advance(job, stage=None, state="ready")
-    else:
-        store.advance(job, stage=following, state="queued")
+    _commit(
+        store,
+        job.id,
+        lease_id,
+        stage=following,
+        state="ready" if following is None else "queued",
+    )
+
+
+def _commit(store: JobStore, job_id: str, lease_id: str, *, stage, state) -> None:
+    # A stale commit is not a failure: a newer claim owns this job now.
+    with suppress(StaleLease):
+        store.commit(job_id, lease_id, stage=stage, state=state)
+
+
+def _fail(store: JobStore, job_id: str, lease_id: str, error: str) -> None:
+    # A stale fail is not a failure: a newer claim owns this job now.
+    with suppress(StaleLease):
+        store.fail(job_id, lease_id, error)
 
 
 def run_once(store: JobStore, handlers: dict[Stage, StageHandler]) -> int:
     """One worker tick: reap timeouts, then process at most one job."""
-    store.reap_timeouts()
-    job = store.claim_next(skip_model_stages=store.paused())
-    if job is None:
+    claimed = store.reap_and_claim(skip_model_stages=store.paused())
+    if claimed is None:
         return 0
-    run_job(job, handlers, store)
+    run_job(claimed.job, claimed.lease_id, handlers, store)
     return 1
 
 
 class PostgresJobStore:
-    """Job queue backed by the ``enrichment_jobs`` and ``service_flags`` tables."""
+    """Job queue backed by ``enrichment_jobs``; each op is a short transaction."""
 
-    def __init__(self, conn: psycopg.Connection) -> None:
-        self.conn = conn
+    def __init__(self, *, lease_seconds: int = LEASE_SECONDS) -> None:
+        self.lease_seconds = lease_seconds
 
     def paused(self) -> bool:
-        row = self.conn.execute(
-            "SELECT value FROM public.service_flags WHERE key = %s", (PAUSE_FLAG,)
-        ).fetchone()
-        return row is not None and row[0] == "true"
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM public.service_flags WHERE key = %s",
+                (PAUSE_FLAG,),
+            ).fetchone()
+            return row is not None and row[0] == "true"
 
-    def reap_timeouts(self) -> int:
-        rows = self.conn.execute(
-            "SELECT id, retry_count FROM public.enrichment_jobs "
-            "WHERE state = 'running' AND timeout_at < now() FOR UPDATE"
-        ).fetchall()
-        for job_id, retry_count in rows:
-            outcome = "queued" if retry_count < MAX_RETRIES else "failed"
-            self.conn.execute(
-                "UPDATE public.enrichment_jobs SET retry_count = retry_count + 1, "
-                "state = %s, last_error = 'stage timeout', claimed_at = NULL, "
-                "timeout_at = NULL, updated_at = now() WHERE id = %s",
-                (outcome, job_id),
-            )
-        return len(rows)
+    def reap_and_claim(self, *, skip_model_stages: bool = False) -> ClaimedJob | None:
+        with connect(autocommit=False) as conn:
+            self._reap(conn)
+            claimed = self._claim(conn, skip_model_stages)
+            conn.commit()
+            return claimed
 
-    def claim_next(self, *, skip_model_stages: bool = False) -> EnrichmentJob | None:
+    def _reap(self, conn: psycopg.Connection) -> None:
+        """Expire leases past their deadline, atomically with the next claim."""
+        conn.execute(
+            "UPDATE public.enrichment_jobs SET retry_count = retry_count + 1, "
+            "state = CASE WHEN retry_count < %s THEN 'queued' ELSE 'failed' END, "
+            "last_error = 'lease expired', lease_id = NULL, lease_expires_at = NULL, "
+            "updated_at = now() "
+            "WHERE state = 'running' AND lease_expires_at < now()",
+            (MAX_RETRIES,),
+        )
+
+    def _claim(
+        self, conn: psycopg.Connection, skip_model_stages: bool
+    ) -> ClaimedJob | None:
         stage_filter = ""
         if skip_model_stages:
-            stage_filter = "AND j.stage NOT IN ('build_source_summaries','build_consensus')"
-        row = self.conn.execute(
+            stage_filter = (
+                "AND j.stage NOT IN ('build_source_summaries','build_consensus')"
+            )
+        row = conn.execute(
             "SELECT id, entity_id, stage, retry_count, last_error, corpus_hash, "
             "payload, resolved_release_group_id, resolution_status "
             "FROM public.enrichment_jobs j "
@@ -181,55 +230,83 @@ class PostgresJobStore:
         ).fetchone()
         if row is None:
             return None
-        self.conn.execute(
-            "UPDATE public.enrichment_jobs SET state = 'running', claimed_at = now(), "
-            "timeout_at = now() + interval '%s seconds', updated_at = now() WHERE id = %s",
-            (STAGE_TIMEOUT_SECONDS, row[0]),
+        lease_id = str(uuid.uuid4())
+        conn.execute(
+            "UPDATE public.enrichment_jobs SET state = 'running', "
+            "lease_id = %s, lease_expires_at = now() + interval '%s seconds', "
+            "attempt = attempt + 1, updated_at = now() WHERE id = %s",
+            (lease_id, self.lease_seconds, row[0]),
         )
-        return EnrichmentJob(
-            id=row[0],
-            entity_id=row[1],
-            stage=row[2],
-            state="running",
-            retry_count=row[3],
-            last_error=row[4],
-            corpus_hash=row[5],
-            payload=row[6] or {},
-            resolved_release_group_id=row[7],
-            resolution_status=row[8] or "pending",
+        return ClaimedJob(
+            job=EnrichmentJob(
+                id=row[0],
+                entity_id=row[1],
+                stage=row[2],
+                state="running",
+                retry_count=row[3],
+                last_error=row[4],
+                corpus_hash=row[5],
+                payload=row[6] or {},
+                resolved_release_group_id=row[7],
+                resolution_status=row[8] or "pending",
+            ),
+            lease_id=lease_id,
         )
 
-    def advance(
-        self, job: EnrichmentJob, *, stage: Stage | None, state: JobState
+    def _assert_cas(self, cursor: psycopg.Cursor) -> None:
+        if cursor.rowcount == 0:
+            raise StaleLease("lease no longer matches; refusing to commit")
+
+    def commit(
+        self,
+        job_id: str,
+        lease_id: str,
+        *,
+        stage: Stage | None,
+        state: JobState,
     ) -> None:
-        self.conn.execute(
-            "UPDATE public.enrichment_jobs SET stage = COALESCE(%s, stage), "
-            "state = %s, claimed_at = NULL, timeout_at = NULL, last_error = NULL, "
-            "updated_at = now() WHERE id = %s",
-            (stage, state, job.id),
-        )
+        with connect(autocommit=False) as conn:
+            cursor = conn.execute(
+                "UPDATE public.enrichment_jobs SET stage = COALESCE(%s, stage), "
+                "state = %s, lease_id = NULL, lease_expires_at = NULL, "
+                "last_error = NULL, updated_at = now() "
+                "WHERE id = %s AND lease_id = %s",
+                (stage, state, job_id, lease_id),
+            )
+            self._assert_cas(cursor)
+            conn.commit()
 
-    def fail(self, job: EnrichmentJob, error: str) -> None:
-        outcome = failure_outcome(job)
-        self.conn.execute(
-            "UPDATE public.enrichment_jobs SET retry_count = retry_count + 1, "
-            "state = %s, last_error = %s, claimed_at = NULL, timeout_at = NULL, "
-            "updated_at = now() WHERE id = %s",
-            (outcome, error, job.id),
-        )
+    def fail(self, job_id: str, lease_id: str, error: str) -> None:
+        with connect(autocommit=False) as conn:
+            cursor = conn.execute(
+                "UPDATE public.enrichment_jobs SET retry_count = retry_count + 1, "
+                "state = CASE WHEN retry_count < %s THEN 'queued' ELSE 'failed' END, "
+                "last_error = %s, lease_id = NULL, lease_expires_at = NULL, "
+                "updated_at = now() WHERE id = %s AND lease_id = %s",
+                (MAX_RETRIES, error, job_id, lease_id),
+            )
+            self._assert_cas(cursor)
+            conn.commit()
 
-    def set_corpus_hash(self, job: EnrichmentJob, corpus_hash: str) -> None:
-        self.conn.execute(
-            "UPDATE public.enrichment_jobs SET corpus_hash = %s, updated_at = now() "
-            "WHERE id = %s",
-            (corpus_hash, job.id),
-        )
+    def set_corpus_hash(self, job_id: str, lease_id: str, corpus_hash: str) -> None:
+        with connect(autocommit=False) as conn:
+            cursor = conn.execute(
+                "UPDATE public.enrichment_jobs SET corpus_hash = %s, "
+                "updated_at = now() WHERE id = %s AND lease_id = %s",
+                (corpus_hash, job_id, lease_id),
+            )
+            self._assert_cas(cursor)
+            conn.commit()
 
     def set_resolution(
-        self, job: EnrichmentJob, release_group_id: str | None, status: str
+        self, job_id: str, lease_id: str, release_group_id: str | None, status: str
     ) -> None:
-        self.conn.execute(
-            "UPDATE public.enrichment_jobs SET resolved_release_group_id = %s, "
-            "resolution_status = %s, updated_at = now() WHERE id = %s",
-            (release_group_id, status, job.id),
-        )
+        with connect(autocommit=False) as conn:
+            cursor = conn.execute(
+                "UPDATE public.enrichment_jobs SET resolved_release_group_id = %s, "
+                "resolution_status = %s, updated_at = now() "
+                "WHERE id = %s AND lease_id = %s",
+                (release_group_id, status, job_id, lease_id),
+            )
+            self._assert_cas(cursor)
+            conn.commit()

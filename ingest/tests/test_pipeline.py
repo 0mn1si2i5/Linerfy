@@ -26,16 +26,19 @@ _JOB = EnrichmentJob(
 class FakeStore:
     def __init__(self):
         self.resolutions: list[tuple] = []
-        self.advanced: list[tuple] = []
+        self.commits: list[tuple] = []
 
-    def set_resolution(self, job, release_group_id, status):
+    def set_resolution(self, job_id, lease_id, release_group_id, status):
         self.resolutions.append((release_group_id, status))
 
-    def advance(self, job, *, stage, state):
-        self.advanced.append((stage, state))
+    def commit(self, job_id, lease_id, *, stage, state):
+        self.commits.append((stage, state))
 
-    def fail(self, job, error):
+    def fail(self, job_id, lease_id, error):
         raise AssertionError(f"unexpected fail: {error}")
+
+    def set_corpus_hash(self, job_id, lease_id, corpus_hash):
+        raise AssertionError("resolve must not set a corpus hash")
 
 
 class FakeMB(MusicBrainzAdapter):
@@ -54,7 +57,6 @@ class FakeMB(MusicBrainzAdapter):
 def _deps(store, musicbrainz) -> PipelineDeps:
     return PipelineDeps(
         store=store,
-        conn=None,  # unused by resolve
         musicbrainz=musicbrainz,
         critiquebrainz=None,
         wikipedia=None,
@@ -81,7 +83,8 @@ def test_resolve_entity_sets_resolution_on_match() -> None:
     )
     mb = FakeMB([rg], rg)
     handlers = build_handlers(_deps(store, mb))
-    handlers["resolve_entity"](_JOB)
+    advanced = handlers["resolve_entity"](_JOB, "lease-1")
+    assert advanced is True
     assert store.resolutions == [("rg-1", "resolved")]
 
 
@@ -90,5 +93,18 @@ def test_resolve_entity_marks_unavailable_on_no_match() -> None:
     mb = FakeMB([], None)
     handlers = build_handlers(_deps(store, mb))
     with pytest.raises(JobUnavailable):
-        handlers["resolve_entity"](_JOB)
+        handlers["resolve_entity"](_JOB, "lease-1")
     assert store.resolutions == [(None, "unavailable")]
+
+
+def test_resolve_entity_preserves_ambiguous() -> None:
+    store = FakeStore()
+    # A low-score candidate: unreliable, not a hard not-found.
+    low = ReleaseGroup(
+        mbid="rg-low", title="Norman Fucking Rockwell!", artist="Lana Del Rey", score=10
+    )
+    mb = FakeMB([low], None)
+    handlers = build_handlers(_deps(store, mb))
+    with pytest.raises(JobUnavailable):
+        handlers["resolve_entity"](_JOB, "lease-1")
+    assert store.resolutions == [(None, "ambiguous")]

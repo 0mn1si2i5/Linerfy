@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -100,7 +101,15 @@ class Genre(BaseModel):
 
 
 class Summary(BaseModel):
-    """A generated summary whose every claim cites stored review documents."""
+    """A generated summary whose every claim cites stored review documents.
+
+    ``kind`` distinguishes a per-source summary (``source``, with ``source_id``)
+    from a cross-source consensus block (``consensus``, pooled by
+    ``license_pool``). ``license_pool`` is the license id that scopes the
+    summary, so incompatible licenses never share a run. ``skipped_reason`` is
+    set when a consensus was legitimately not generated (fewer than two distinct
+    sources in the pool).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -110,6 +119,12 @@ class Summary(BaseModel):
     generated_at: datetime
     corpus_hash: str = Field(min_length=1)
     claims: list[CitedClaim] = Field(min_length=1)
+    kind: Literal["source", "consensus"] = "source"
+    license_pool: str = ""
+    source_id: str | None = None
+    attribution: str = ""
+    ai_modified: bool = True
+    skipped_reason: str | None = None
 
 
 class IngestedContext(BaseModel):
