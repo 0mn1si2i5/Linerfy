@@ -3,9 +3,9 @@
 Each stage reads its input from the job and the persisted database, performs
 external HTTP/model work OUTSIDE any transaction, and persists its output so a
 later stage (or a re-run after a crash) can pick up where it left off. Stages
-are idempotent and resumable: entity/source/document writes upsert, source
-summaries and consensus are written as candidates, and publish atomically
-promotes the candidate set.
+are idempotent and resumable: entity/source/document writes upsert, and each
+source summary or consensus block publishes itself atomically in one guarded
+transaction -- there is no release-wide publish stage.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
 """Persistent enrichment job lifecycle with short, atomic leases.
 
-An enrichment job walks a release through five idempotent stages --
-``resolve_entity -> fetch_sources -> build_source_summaries -> build_consensus
--> publish``. A worker performs external HTTP and model work OUTSIDE any
-database transaction, so the job row is never locked across a network call.
+An enrichment job walks a release through four idempotent stages --
+``resolve_entity -> fetch_sources -> build_source_summaries -> build_consensus``.
+A worker performs external HTTP and model work OUTSIDE any database transaction,
+so the job row is never locked across a network call.
 
 Claiming writes a fresh ``lease_id`` + ``lease_expires_at`` in one short
 transaction; committing a result is a compare-and-set on ``(id, lease_id)``, so
@@ -114,12 +114,16 @@ def assert_active_lease(conn: psycopg.Connection, job_id: str, lease_id: str) ->
 
     Used at the start of a write transaction (e.g. seeding review documents or
     publishing a summary) so an expired worker can neither overwrite the corpus
-    nor publish a summary. The write that follows re-checks the same predicate
-    in its own WHERE clause, so this guard is an early-out, not the fence.
+    nor publish a summary. ``FOR UPDATE`` locks the job row for the rest of the
+    transaction, so a concurrent reaper cannot take over the lease between this
+    check and the caller's commit: the reaper's ``UPDATE`` blocks until this
+    transaction finishes. The write that follows re-checks the same predicate in
+    its own WHERE clause, so this guard is an early-out and the lock is the fence.
     """
     row = conn.execute(
         "SELECT 1 FROM public.enrichment_jobs "
-        "WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
+        "WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE
+        + " FOR UPDATE",
         (job_id, lease_id),
     ).fetchone()
     if row is None:

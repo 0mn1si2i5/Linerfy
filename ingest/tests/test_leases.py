@@ -9,7 +9,9 @@ integration tests.
 from __future__ import annotations
 
 import os
+import time
 
+import psycopg
 import pytest
 from _db_helpers import skip_unless_test_db
 
@@ -236,6 +238,53 @@ def test_active_lease_helpers_accept_valid_lease() -> None:
             assert row[0] == "corpus-9"
     finally:
         _delete_job("lease-9")
+
+
+def test_reaper_cannot_take_over_between_lease_check_and_commit() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "lease-race")
+        store = PostgresJobStore(lease_seconds=1)
+        claimed = store.reap_and_claim()
+        assert claimed is not None
+        job_id, lease_id = claimed.job.id, claimed.lease_id
+
+        # Connection A: the lease check locks the job row FOR UPDATE and holds
+        # it open — the window between the check and the caller's commit.
+        conn_a = connect(autocommit=False)
+        try:
+            assert_active_lease(conn_a, job_id, lease_id)
+
+            # Let the 1-second lease lapse so the reaper would target this row.
+            time.sleep(2.0)
+
+            # Connection B: the reaper must block on connection A's row lock
+            # rather than take over the lease before the check's commit.
+            conn_b = connect()
+            conn_b.execute("SET lock_timeout = '500ms'")
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                store._reap(conn_b)
+            conn_b.rollback()
+            conn_b.close()
+
+            # Only after connection A commits does the reaper get through.
+            conn_a.commit()
+        finally:
+            conn_a.close()
+
+        with connect() as conn:
+            store._reap(conn)
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT state, lease_id FROM public.enrichment_jobs "
+                "WHERE entity_id = 'lease-race'"
+            ).fetchone()
+            assert row[0] == "queued"
+            assert row[1] is None
+    finally:
+        _delete_job("lease-race")
 
 
 def test_timeout_reap_runs_real_sql_and_requeues() -> None:

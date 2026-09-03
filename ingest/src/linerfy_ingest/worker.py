@@ -1,6 +1,6 @@
 """Shared worker entrypoint used by the CLI and the Vercel Python function.
 
-Constructs the live five-stage handlers and runs one bounded tick. The model
+Constructs the live four-stage handlers and runs one bounded tick. The model
 budget is the durable Postgres ledger (serverless-safe); the model provider is
 resolved lazily on the first model call, so resolve and fetch stages still run
 when ``MODEL_API_KEY`` is absent. Adapters and ``chat`` are injectable so a test
@@ -77,7 +77,7 @@ def build_worker_handlers(
     wikipedia=None,
     chat=None,
 ):
-    """Construct the five-stage handlers with a durable budget ledger.
+    """Construct the four-stage handlers with a durable budget ledger.
 
     Passing ``chat`` bypasses the budget-wrapped provider (used by tests with a
     stub model); otherwise real model calls reserve and settle against the
