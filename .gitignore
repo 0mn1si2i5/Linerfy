@@ -22,3 +22,6 @@ ingest/.venv/
 
 # Agent / skill process artifacts (plans, specs, scratch)
 docs/superpowers/
+.vercel/
+.env.local
+supabase/.temp/

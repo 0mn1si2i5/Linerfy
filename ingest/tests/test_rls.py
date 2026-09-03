@@ -158,6 +158,25 @@ def test_anon_is_fully_revoked(rls_ids) -> None:
                 conn.execute("RESET ROLE")
 
 
+@pytest.mark.parametrize("role", ["anon", "authenticated"])
+def test_client_roles_have_no_privileges_on_server_only_tables(rls_ids, role) -> None:
+    with connect() as conn:
+        for table in (
+            "provider_identifiers",
+            "source_policies",
+            "enrichment_jobs",
+            "service_flags",
+            "model_usage_reservations",
+            "model_budget",
+        ):
+            conn.execute(f"SET ROLE {role}")
+            try:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    conn.execute(f"SELECT count(*) FROM public.{table}")
+            finally:
+                conn.execute("RESET ROLE")
+
+
 def test_authenticated_reads_published_same_release_citations(rls_ids) -> None:
     with connect() as conn:
         assert (

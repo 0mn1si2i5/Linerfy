@@ -35,3 +35,8 @@ revoke select on public.claims from anon;
 revoke select on public.claim_sources from anon;
 revoke select on public.genres from anon;
 revoke select on public.genre_sources from anon;
+
+-- Supabase grants table privileges to API roles through default privileges.
+-- These two tables are server-only, so revoke those implicit grants explicitly.
+revoke all on public.provider_identifiers from anon, authenticated;
+revoke all on public.source_policies from anon, authenticated;

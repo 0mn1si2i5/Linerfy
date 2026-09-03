@@ -37,3 +37,5 @@ create table if not exists public.service_flags (
 -- or write the queue. Access is via the service role / the worker connection.
 alter table public.enrichment_jobs enable row level security;
 alter table public.service_flags enable row level security;
+revoke all on public.enrichment_jobs from anon, authenticated;
+revoke all on public.service_flags from anon, authenticated;

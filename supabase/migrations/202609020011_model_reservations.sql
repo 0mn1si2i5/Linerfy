@@ -42,3 +42,5 @@ insert into public.model_budget (id, committed_cny, reserved_cny)
 -- Server-only: anon/authenticated get no grants, and no RLS read policy.
 alter table public.model_usage_reservations enable row level security;
 alter table public.model_budget enable row level security;
+revoke all on public.model_usage_reservations from anon, authenticated;
+revoke all on public.model_budget from anon, authenticated;
