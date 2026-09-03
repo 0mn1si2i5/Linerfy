@@ -240,3 +240,19 @@ h2 {
 .now-playing.muted {
   color: #8a8274;
 }
+.context {
+  padding: 0 14px 20px;
+}
+.context .context-card {
+  border-radius: 16px;
+}
+.context-status {
+  margin: 16px 14px;
+  font-size: 13px;
+}
+.context-status.muted {
+  color: #8a8274;
+}
+.context-status.error {
+  color: #7a2e22;
+}

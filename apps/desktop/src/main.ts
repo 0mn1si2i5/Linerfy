@@ -7,6 +7,7 @@ import {
   createAppleMusicProvider,
   createNowPlayingService,
   createSpotifyProvider,
+  type NowPlayingTrack,
   type ScriptRunner,
 } from "@linerfy/now-playing";
 import {
@@ -22,6 +23,11 @@ import {
 } from "electron";
 
 import type { LoginState, SignInResult } from "./auth-state";
+import {
+  trackKey,
+  type ContextApiResponse,
+  type ContextState,
+} from "./context-state";
 import { performOAuthFlow, type SupabaseSession } from "./oauth";
 import { createWindowOptions } from "./security";
 import {
@@ -124,6 +130,85 @@ function sendAuthState() {
   }
 }
 
+// The authenticated API base (e.g. the Vercel deployment). Context fetching is
+// disabled until it and a session are both present.
+const apiUrl = process.env.LINERFY_API_URL;
+
+let contextFetchSeq = 0;
+let lastFetchedTrackKey: string | null = null;
+let pendingContext = false;
+
+function sendContext(state: ContextState) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("context:changed", state);
+  }
+}
+
+// Fetch context for the current track, discarding stale responses: the seq
+// guard ensures only the latest request is rendered, and `lastFetchedTrackKey`
+// avoids re-fetching an already-ready track on every poll.
+async function fetchContextForTrack(track: NowPlayingTrack) {
+  const session = loadSession();
+  if (!session || !apiUrl) {
+    sendContext({ status: "idle" });
+    return;
+  }
+  const seq = ++contextFetchSeq;
+  sendContext({ status: "loading" });
+  try {
+    const response = await fetch(`${apiUrl.replace(/\/+$/, "")}/api/context`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        provider: track.provider,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        state: track.state,
+        ...(track.providerUrl ? { providerUrl: track.providerUrl } : {}),
+      }),
+    });
+    if (seq !== contextFetchSeq) return;
+    if (response.status === 401 || response.status === 403) {
+      sendContext({ status: "idle" });
+      return;
+    }
+    const body = (await response.json()) as ContextApiResponse;
+    if (seq !== contextFetchSeq) return;
+    lastFetchedTrackKey = trackKey(track);
+    if (body.status === "ready") {
+      pendingContext = false;
+      sendContext({ status: "ready", context: body.context });
+    } else if (body.status === "queued" || body.status === "running") {
+      pendingContext = true;
+      sendContext({ status: body.status, stage: body.stage ?? "" });
+    } else {
+      pendingContext = false;
+      sendContext({ status: body.status });
+    }
+  } catch {
+    if (seq === contextFetchSeq) {
+      pendingContext = true;
+      sendContext({ status: "error", message: "网络错误" });
+    }
+  }
+}
+
+function maybeFetchContext(track: NowPlayingTrack | null) {
+  if (!track) {
+    lastFetchedTrackKey = null;
+    pendingContext = false;
+    sendContext({ status: "idle" });
+    return;
+  }
+  const key = trackKey(track);
+  if (key === lastFetchedTrackKey && !pendingContext) return;
+  void fetchContextForTrack(track);
+}
+
 function popoverSize(): { width: number; height: number } {
   return {
     width: POPOVER_WIDTH,
@@ -193,6 +278,7 @@ function sendNowPlaying() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("now-playing:changed", track);
     }
+    maybeFetchContext(track);
   });
 }
 
@@ -298,6 +384,9 @@ ipcMain.handle("auth:get-state", () => loginState());
 
 ipcMain.handle("auth:sign-out", () => {
   tokenStore?.clear();
+  lastFetchedTrackKey = null;
+  pendingContext = false;
+  sendContext({ status: "idle" });
   sendAuthState();
 });
 
@@ -315,6 +404,9 @@ ipcMain.handle("auth:sign-in", async (): Promise<SignInResult> => {
     );
     tokenStore?.save(JSON.stringify(session));
     sendAuthState();
+    lastFetchedTrackKey = null;
+    pendingContext = false;
+    void nowPlaying.getNowPlaying().then(maybeFetchContext);
     return loginState();
   } catch (error) {
     return {

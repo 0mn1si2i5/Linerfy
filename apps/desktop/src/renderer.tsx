@@ -1,9 +1,10 @@
-import { LinerfyMark } from "@linerfy/ui";
+import { LinerfyMark, MusicContextCard } from "@linerfy/ui";
 import type { NowPlayingTrack } from "@linerfy/now-playing";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { LoginState } from "./auth-state";
+import type { ContextState } from "./context-state";
 import "./renderer.css";
 
 type ViewState =
@@ -17,6 +18,7 @@ function DesktopApp() {
   const [auth, setAuth] = useState<LoginState>({ status: "signed-out" });
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [context, setContext] = useState<ContextState>({ status: "idle" });
 
   useEffect(() => {
     let mounted = true;
@@ -44,11 +46,16 @@ function DesktopApp() {
       setAuth(state),
     );
 
+    const stopContext = window.linerfy.onContextChanged((state) =>
+      setContext(state),
+    );
+
     return () => {
       mounted = false;
       stopNowPlaying();
       stopWindowState();
       stopAuthState();
+      stopContext();
     };
   }, []);
 
@@ -121,6 +128,22 @@ function DesktopApp() {
           </p>
         </div>
       )}
+
+      {context.status === "ready" ? (
+        <div className="context">
+          <MusicContextCard context={context.context} />
+        </div>
+      ) : context.status === "queued" || context.status === "running" ? (
+        <p className="context-status muted">正在生成语境…</p>
+      ) : context.status === "unavailable" ? (
+        <p className="context-status muted">暂无可用语境</p>
+      ) : context.status === "failed" ? (
+        <p className="context-status muted">语境生成失败</p>
+      ) : context.status === "error" ? (
+        <p className="context-status error">{context.message}</p>
+      ) : context.status === "loading" ? (
+        <p className="context-status muted">正在读取语境…</p>
+      ) : null}
     </main>
   );
 }
