@@ -14,8 +14,8 @@ v1 ships no search, content home, recommendations, favorites, social features, c
 
 ## 形态 / Shape
 
-- **macOS companion**（`apps/desktop`）：菜单栏 popover 与全局快捷键打开，读取当前播放并展示语境。当前已是普通窗口 + 播放识别；菜单栏/快捷键/窗口状态为计划中。
-- **Vercel API**（`apps/web`）：已认证 API、GitHub OAuth 回调、最小登录/结果页，以及开发/管理 smoke 页面。它不再是面向用户的音乐浏览站；`/context/[slug]` 仅作开发/管理 smoke 保留。
+- **macOS companion**（`apps/desktop`）：菜单栏 popover 与全局快捷键打开，读取当前播放、完成 GitHub OAuth 登录，并展示完整语境（曲风/标签/评分/单来源总结/综合观点/引用/链接）。
+- **Vercel API**（`apps/web`）：已认证 API（`POST /api/context` 在线创建任务 + `/api/context/[slug]` 读语境）、GitHub OAuth 回调、最小登录/结果页，以及受保护的 worker route（`/api/enrichment/run`，由 Supabase Cron 每分钟调用）。
 - **采集**（`ingest`）：实体匹配、许可来源、模型总结的批处理管线。
 - **存储**（`supabase/migrations`）：catalog、enrichment jobs 与行级权限。
 
@@ -86,10 +86,10 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 ## 当前状态 / Status
 
-> 以下标注依据 fresh 验证（测试 + 构建 + 代码路径），不代表生产联调通过。
+> 以下标注依据 fresh 验证（测试 + 类型检查 + 构建 + 代码路径），不代表生产联调通过。
 
-- **已实现且有测试**：Supabase catalog 与 RLS（认证边界迁移就绪：取消匿名读取）；可追溯中文总结（模型边界、原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 状态机（幂等、重试、超时、暂停）与管理 CLI；macOS 菜单栏 now-playing 识别。
-- **修复中（组件已建、产品闭环未接通）**：enrichment 五阶段真实 worker（stage handler 未接）；在线任务创建与 worker route；桌面 OAuth 登录与 token 保存；桌面 context 展示；Web 页面认证门禁（当前公开页面绕过认证读取 catalog）；许可证池隔离；可靠 100 元预算账本。
-- **待用户配置**：GitHub OAuth app + Supabase provider + 白名单；生产 Supabase 迁移；Vercel 部署。
+- **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；Web 页面认证门禁（`/` 与 `/context/[slug]` 只读已认证 API，service-role 仅在服务端）；可追溯中文总结（模型边界、原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 五阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus → publish`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
+- **验收中（R10）**：真实 E2E 测试（M8）；桌面打包 exit-0 证据与本地包启动 smoke。
+- **真实 OAuth 联调待用户配置**：GitHub OAuth app + Supabase provider + 重定向 URL 白名单 + 数字 ID 白名单尚未就绪；生产 Supabase 迁移与 Vercel 部署尚未执行。代码路径已通，端到端联调需以上配置后方可验收。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。
