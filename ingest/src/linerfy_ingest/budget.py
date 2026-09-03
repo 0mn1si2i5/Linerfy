@@ -85,6 +85,28 @@ def worst_case_usage(max_tokens: int) -> TokenUsage:
     return TokenUsage(input=max_tokens, output=max_tokens)
 
 
+# A small, explicit safety margin applied on top of the per-token worst case, so
+# rounding, per-request overhead, and multi-part pricing can never push a real
+# call just past the cap.
+SAFETY_MARGIN = 1.1
+
+
+def reserve_cost_cny(rate: ModelRate, input_tokens: int, max_output_tokens: int) -> float:
+    """The conservative CNY upper bound to reserve for one call.
+
+    Assumes the whole prompt is non-cached input (billed at the input rate), the
+    model emits the full output budget, and the prompt is also cache-written
+    (billed at the cache-write rate where a provider charges it); then a safety
+    margin is applied. This never under-bills a real call.
+    """
+    usage = TokenUsage(
+        input=input_tokens,
+        output=max_output_tokens,
+        cache_write=input_tokens,
+    )
+    return estimate_cost_cny(usage, rate) * SAFETY_MARGIN
+
+
 @dataclass
 class LedgerEntry:
     request_id: str
@@ -232,15 +254,46 @@ class DbBudgetLedger:
         self,
         *,
         model: str,
-        max_tokens: int,
+        input_tokens: int,
+        max_output_tokens: int,
         request_id: str,
         provider: str = "",
         job_id: str | None = None,
     ) -> float:
-        """Atomically reserve a worst-case cost; returns the reserved CNY."""
+        """Atomically reserve a worst-case cost for one call; idempotent.
+
+        The reserved amount covers the prompt input upper bound, the full output
+        budget, and a safety margin. A retry with the same ``request_id`` returns
+        the original reservation without charging again; a replay with different
+        parameters is rejected, and the reservation is only created (and the
+        running total raised) when no reservation for the id exists.
+        """
         rate = self.rate(model)
-        worst = estimate_cost_cny(worst_case_usage(max_tokens), rate)
+        worst = reserve_cost_cny(rate, input_tokens, max_output_tokens)
+        job_uuid = uuid.UUID(job_id) if job_id else None
         with connect(autocommit=False) as conn:
+            existing = conn.execute(
+                "SELECT model, input_tokens, output_tokens, reserved_cny, status "
+                "FROM public.model_usage_reservations "
+                "WHERE request_id = %s FOR UPDATE",
+                (request_id,),
+            ).fetchone()
+            if existing is not None:
+                ex_model, ex_in, ex_out, ex_reserved, ex_status = existing
+                if ex_status != "reserved":
+                    raise BudgetError(
+                        f"request {request_id} is already {ex_status}"
+                    )
+                if ex_model != model:
+                    raise BudgetError(
+                        f"request {request_id} replayed with a different model"
+                    )
+                if int(ex_in or 0) != input_tokens or int(ex_out or 0) != max_output_tokens:
+                    raise BudgetError(
+                        f"request {request_id} replayed with different parameters"
+                    )
+                return float(ex_reserved or 0.0)  # idempotent retry
+
             row = conn.execute(
                 "SELECT committed_cny, reserved_cny FROM public.model_budget "
                 "WHERE id = 1 FOR UPDATE"
@@ -258,14 +311,16 @@ class DbBudgetLedger:
             )
             conn.execute(
                 "INSERT INTO public.model_usage_reservations "
-                "(request_id, job_id, provider, model, reserved_cny, status, expires_at) "
-                "VALUES (%s,%s,%s,%s,%s,'reserved', now() + make_interval(secs => %s)) "
-                "ON CONFLICT (request_id) DO NOTHING",
+                "(request_id, job_id, provider, model, input_tokens, output_tokens, "
+                " reserved_cny, status, expires_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,'reserved', now() + make_interval(secs => %s))",
                 (
                     request_id,
-                    uuid.UUID(job_id) if job_id else None,
+                    job_uuid,
                     provider,
                     model,
+                    input_tokens,
+                    max_output_tokens,
                     worst,
                     self.reservation_seconds,
                 ),
@@ -291,14 +346,16 @@ class DbBudgetLedger:
             ).fetchone()
             if row is None:
                 raise BudgetError(f"no reservation for request {request_id}")
-            if row[1] == "settled":
-                return float(row[2] or 0.0)  # already settled; idempotent
-            reserved = float(row[0] or 0.0)
+            reserved, status, settled_cny = row
+            if status == "settled":
+                return float(settled_cny or 0.0)  # already settled; idempotent
+            if status == "expired":
+                raise BudgetError(f"request {request_id} was already released/expired")
             conn.execute(
                 "UPDATE public.model_budget "
                 "SET reserved_cny = reserved_cny - %s, committed_cny = committed_cny + %s "
                 "WHERE id = 1",
-                (reserved, actual),
+                (float(reserved or 0.0), actual),
             )
             conn.execute(
                 "UPDATE public.model_usage_reservations "
@@ -316,6 +373,36 @@ class DbBudgetLedger:
             )
             conn.commit()
         return actual
+
+    def release(self, *, request_id: str) -> None:
+        """Explicitly rescind a reservation without settling; idempotent.
+
+        Releases the reserved amount back to the running total and marks the
+        reservation expired. Calling it twice, or on an already-expired
+        reservation, has no further effect; settling a released reservation is
+        refused.
+        """
+        with connect(autocommit=False) as conn:
+            row = conn.execute(
+                "SELECT reserved_cny, status FROM public.model_usage_reservations "
+                "WHERE request_id = %s FOR UPDATE",
+                (request_id,),
+            ).fetchone()
+            if row is None or row[1] == "expired":
+                return
+            if row[1] == "settled":
+                raise BudgetError(f"request {request_id} is already settled")
+            conn.execute(
+                "UPDATE public.model_budget SET reserved_cny = reserved_cny - %s "
+                "WHERE id = 1",
+                (float(row[0] or 0.0),),
+            )
+            conn.execute(
+                "UPDATE public.model_usage_reservations SET status = 'expired' "
+                "WHERE request_id = %s",
+                (request_id,),
+            )
+            conn.commit()
 
     def expire_stale(self) -> int:
         """Release reservations past their deadline, returning the count."""

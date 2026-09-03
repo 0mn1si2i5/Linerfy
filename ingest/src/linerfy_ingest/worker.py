@@ -54,6 +54,16 @@ def _resolve_model():
     )
 
 
+def _estimate_input_tokens(messages: list[dict[str, str]]) -> int:
+    """A conservative upper bound on the prompt token count (~2 chars/token).
+
+    This over-estimates for CJK text (which is closer to one token per
+    character) so the pre-call reservation can never under-bill the prompt.
+    """
+    total = sum(len(m.get("content", "")) for m in messages)
+    return max(1, total // 2 + 1)
+
+
 def build_worker_handlers(
     *,
     budget: DbBudgetLedger | None = None,
@@ -78,12 +88,17 @@ def build_worker_handlers(
         provider = provider_cache["provider"]
         request_id = uuid.uuid4().hex
         ledger.reserve(
-            model=provider.model, max_tokens=max_tokens, request_id=request_id
+            model=provider.model,
+            input_tokens=_estimate_input_tokens(messages),
+            max_output_tokens=max_tokens,
+            request_id=request_id,
         )
         try:
             result = provider.chat(messages)
         except Exception:
-            # Leave the reservation to expire; the stage boundary fails the job.
+            # Explicitly release the reservation rather than leaving it to
+            # expire; the stage boundary then fails the job.
+            ledger.release(request_id=request_id)
             raise
         ledger.settle(request_id=request_id, model=provider.model, usage=result.usage)
         return result
