@@ -9,16 +9,13 @@ create table if not exists public.enrichment_jobs (
       'resolve_entity',
       'fetch_sources',
       'build_source_summaries',
-      'build_consensus',
-      'publish'
+      'build_consensus'
     )),
   state text not null default 'queued'
     check (state in ('queued', 'running', 'ready', 'unavailable', 'failed')),
   retry_count integer not null default 0 check (retry_count >= 0),
   last_error text,
   corpus_hash text,
-  claimed_at timestamptz,
-  timeout_at timestamptz,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   unique (entity_kind, entity_id)
