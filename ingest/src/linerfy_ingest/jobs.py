@@ -106,6 +106,8 @@ class JobStore(Protocol):
         state: JobState,
     ) -> None: ...
 
+    def renew(self, job_id: str, lease_id: str) -> None: ...
+
     def fail(self, job_id: str, lease_id: str, error: str) -> None: ...
 
     def set_corpus_hash(self, job_id: str, lease_id: str, corpus_hash: str) -> None: ...
@@ -233,7 +235,7 @@ class PostgresJobStore:
         lease_id = str(uuid.uuid4())
         conn.execute(
             "UPDATE public.enrichment_jobs SET state = 'running', "
-            "lease_id = %s, lease_expires_at = now() + interval '%s seconds', "
+            "lease_id = %s, lease_expires_at = now() + make_interval(secs => %s), "
             "attempt = attempt + 1, updated_at = now() WHERE id = %s",
             (lease_id, self.lease_seconds, row[0]),
         )
@@ -272,6 +274,23 @@ class PostgresJobStore:
                 "last_error = NULL, updated_at = now() "
                 "WHERE id = %s AND lease_id = %s",
                 (stage, state, job_id, lease_id),
+            )
+            self._assert_cas(cursor)
+            conn.commit()
+
+    def renew(self, job_id: str, lease_id: str) -> None:
+        """Extend the lease deadline, guarded by compare-and-set on the lease.
+
+        A stage that spends a long time outside the database (an HTTP fetch or a
+        model call) renews before that work so a concurrent reaper cannot take
+        the job mid-stage. A stale worker's renew is refused just like a commit.
+        """
+        with connect(autocommit=False) as conn:
+            cursor = conn.execute(
+                "UPDATE public.enrichment_jobs SET "
+                "lease_expires_at = now() + make_interval(secs => %s), "
+                "updated_at = now() WHERE id = %s AND lease_id = %s",
+                (self.lease_seconds, job_id, lease_id),
             )
             self._assert_cas(cursor)
             conn.commit()

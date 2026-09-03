@@ -173,8 +173,10 @@ def _build_source_summaries(job: EnrichmentJob, lease_id: str, deps: PipelineDep
     for source_id, source_documents in by_source.items():
         if source_id in done:
             continue
-        # One bounded model call per source, outside any transaction.
+        # One bounded model call per source, outside any transaction. Renew the
+        # lease first so a long model call cannot be reaped mid-stage.
         first = source_documents[0]
+        deps.store.renew(job.id, lease_id)
         summary = summarize(
             _as_corpus(source_documents),
             model=deps.model,
@@ -218,6 +220,8 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
                     attribution=attribution,
                 )
         else:
+            # Renew the lease before the model call so it cannot be reaped.
+            deps.store.renew(job.id, lease_id)
             consensus = summarize(
                 _as_corpus(pool_documents),
                 model=deps.model,

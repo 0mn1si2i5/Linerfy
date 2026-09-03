@@ -124,3 +124,75 @@ def test_expired_lease_is_reaped_and_old_worker_cannot_overwrite() -> None:
         store.commit(fresh.job.id, fresh.lease_id, stage=None, state="ready")
     finally:
         _delete_job("lease-4")
+
+
+def test_renew_extends_lease_and_rejects_stale_lease() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "lease-5")
+        store = PostgresJobStore(lease_seconds=120)
+        claimed = store.reap_and_claim()
+        assert claimed is not None
+
+        # A valid renew pushes the deadline out past the default 120s window.
+        with connect() as conn:
+            before = conn.execute(
+                "SELECT lease_expires_at FROM public.enrichment_jobs "
+                "WHERE entity_id = 'lease-5'"
+            ).fetchone()[0]
+        store.renew(claimed.job.id, claimed.lease_id)
+        with connect() as conn:
+            after = conn.execute(
+                "SELECT lease_expires_at FROM public.enrichment_jobs "
+                "WHERE entity_id = 'lease-5'"
+            ).fetchone()[0]
+        assert after >= before
+
+        # A stale lease is refused by renew too.
+        with connect() as conn:
+            conn.execute(
+                "UPDATE public.enrichment_jobs "
+                "SET lease_id = '00000000-0000-0000-0000-000000000000' "
+                "WHERE entity_id = 'lease-5'"
+            )
+        with pytest.raises(StaleLease):
+            store.renew(claimed.job.id, claimed.lease_id)
+    finally:
+        _delete_job("lease-5")
+
+
+def test_timeout_reap_runs_real_sql_and_requeues() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "lease-6")
+        store = PostgresJobStore(lease_seconds=1)
+        claimed = store.reap_and_claim()
+        assert claimed is not None
+        # Expire the lease directly with real SQL (this exercises make_interval
+        # free of the quoted-placeholder bug that used to break the claim).
+        with connect() as conn:
+            conn.execute(
+                "UPDATE public.enrichment_jobs SET lease_expires_at = now() - interval '1 second' "
+                "WHERE entity_id = 'lease-6'"
+            )
+        # Reap bumps retry_count and requeues (retry_count 0 -> queued).
+        with connect() as conn:
+            conn.execute(
+                "UPDATE public.enrichment_jobs SET retry_count = 0 WHERE entity_id = 'lease-6'"
+            )
+        fresh = store.reap_and_claim()
+        assert fresh is not None and fresh.lease_id != claimed.lease_id
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT state, retry_count, attempt FROM public.enrichment_jobs "
+                "WHERE entity_id = 'lease-6'"
+            ).fetchone()
+            assert row[0] == "running"
+            assert row[1] == 1  # reaped once
+            assert row[2] == 2  # claimed twice
+    finally:
+        _delete_job("lease-6")

@@ -259,7 +259,7 @@ class DbBudgetLedger:
             conn.execute(
                 "INSERT INTO public.model_usage_reservations "
                 "(request_id, job_id, provider, model, reserved_cny, status, expires_at) "
-                "VALUES (%s,%s,%s,%s,%s,'reserved', now() + interval '%s seconds') "
+                "VALUES (%s,%s,%s,%s,%s,'reserved', now() + make_interval(secs => %s)) "
                 "ON CONFLICT (request_id) DO NOTHING",
                 (
                     request_id,
