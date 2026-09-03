@@ -88,7 +88,9 @@ def test_run_job_fails_when_handler_raises() -> None:
         raise RuntimeError("upstream down")
 
     run_job(_job("fetch_sources"), "lease-1", {"fetch_sources": boom}, store)
-    assert store.actions == [("fail", "upstream down")]
+    # The error boundary stores the category, not the message, so the default
+    # path never leaks a body, token, or key into last_error.
+    assert store.actions == [("fail", "RuntimeError")]
 
 
 def test_run_job_fails_without_a_handler() -> None:

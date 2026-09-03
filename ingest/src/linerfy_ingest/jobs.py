@@ -15,6 +15,9 @@ behind a global pause flag.
 
 from __future__ import annotations
 
+import os
+import sys
+import traceback
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -84,6 +87,19 @@ class StaleLease(Exception):
     """A commit was refused because the lease no longer matches the row."""
 
 
+def error_label(exc: BaseException) -> str:
+    """A safe, non-sensitive error label for the default error path.
+
+    Returns only the exception type name (the error category), so a request
+    body, token, key, or full traceback never reaches the durable ``last_error``
+    field or the default worker log. Set ``LINERFY_DEBUG_TRACEBACK=1`` to opt
+    into the full traceback for local debugging.
+    """
+    if os.environ.get("LINERFY_DEBUG_TRACEBACK") == "1":
+        return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return type(exc).__name__
+
+
 class JobUnavailable(Exception):
     """Raised by a stage to mark a job terminally unavailable (no retry)."""
 
@@ -148,7 +164,14 @@ def run_job(
     except StaleLease:
         return  # another worker took over this job; do nothing
     except Exception as exc:  # the job boundary absorbs stage errors for retry
-        _fail(store, job.id, lease_id, str(exc))
+        # Log only job / stage / error category / correlation id. The full
+        # message or traceback is opt-in (LINERFY_DEBUG_TRACEBACK=1) so a
+        # request body, token, or key never reaches the default log.
+        print(
+            f"job {job.entity_id} stage {job.stage} error {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        _fail(store, job.id, lease_id, error_label(exc))
         return
     if not advance:
         return  # the handler re-queued itself; do not advance again
