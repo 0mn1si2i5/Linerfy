@@ -15,6 +15,8 @@ function DesktopApp() {
   const [view, setView] = useState<ViewState>({ kind: "loading" });
   const [locked, setLocked] = useState(true);
   const [auth, setAuth] = useState<LoginState>({ status: "signed-out" });
+  const [signingIn, setSigningIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -50,6 +52,15 @@ function DesktopApp() {
     };
   }, []);
 
+  async function handleSignIn() {
+    setSigningIn(true);
+    setAuthError(null);
+    const result = await window.linerfy.signIn();
+    setSigningIn(false);
+    if (result.status === "error") setAuthError(result.message);
+    // On success the main process broadcasts auth:state, which updates `auth`.
+  }
+
   return (
     <main className="companion">
       <header className="companion-header">
@@ -67,7 +78,15 @@ function DesktopApp() {
               已登录
             </button>
           ) : (
-            <span className="auth-toggle muted">未登录</span>
+            <button
+              className="auth-toggle"
+              type="button"
+              title="使用 GitHub 登录"
+              disabled={signingIn}
+              onClick={() => void handleSignIn()}
+            >
+              {signingIn ? "登录中…" : "登录"}
+            </button>
           )}
           <button
             className="lock-toggle"
@@ -79,6 +98,12 @@ function DesktopApp() {
           </button>
         </div>
       </header>
+
+      {authError ? (
+        <p className="auth-error" role="alert">
+          {authError}
+        </p>
+      ) : null}
 
       {view.kind === "loading" ? (
         <p className="now-playing muted">正在读取…</p>

@@ -21,7 +21,8 @@ import {
   Tray,
 } from "electron";
 
-import type { LoginState } from "./auth-state";
+import type { LoginState, SignInResult } from "./auth-state";
+import { performOAuthFlow, type SupabaseSession } from "./oauth";
 import { createWindowOptions } from "./security";
 import {
   createTokenStore,
@@ -85,10 +86,36 @@ const safeCrypto: SafeCrypto = {
 
 let tokenStore: TokenStore | null = null;
 
+// The session is persisted as a single encrypted blob: a JSON string of the
+// access/refresh tokens. `load()` decrypts it; this parses it back.
+function loadSession(): SupabaseSession | null {
+  const raw = tokenStore?.load();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as SupabaseSession;
+    return parsed.access_token && parsed.refresh_token ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function loginState(): LoginState {
-  return tokenStore && tokenStore.load()
-    ? { status: "signed-in" }
-    : { status: "signed-out" };
+  return loadSession() ? { status: "signed-in" } : { status: "signed-out" };
+}
+
+function oauthConfig() {
+  const url = process.env.SUPABASE_URL;
+  const anonKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !anonKey) return null;
+  const redirectPort = Number(
+    process.env.LINERFY_OAUTH_REDIRECT_PORT ?? "4862",
+  );
+  return {
+    url,
+    anonKey,
+    provider: "github" as const,
+    redirectPort: Number.isFinite(redirectPort) ? redirectPort : 4862,
+  };
 }
 
 function sendAuthState() {
@@ -272,6 +299,29 @@ ipcMain.handle("auth:get-state", () => loginState());
 ipcMain.handle("auth:sign-out", () => {
   tokenStore?.clear();
   sendAuthState();
+});
+
+ipcMain.handle("auth:sign-in", async (): Promise<SignInResult> => {
+  const config = oauthConfig();
+  if (!config) {
+    return {
+      status: "error",
+      message: "OAuth 未配置：缺少 SUPABASE_URL 或 SUPABASE_PUBLISHABLE_KEY",
+    };
+  }
+  try {
+    const session = await performOAuthFlow(config, (url) =>
+      shell.openExternal(url),
+    );
+    tokenStore?.save(JSON.stringify(session));
+    sendAuthState();
+    return loginState();
+  } catch (error) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 });
 
 void app.whenReady().then(async () => {
