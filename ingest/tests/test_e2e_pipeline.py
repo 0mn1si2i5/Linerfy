@@ -157,7 +157,9 @@ def test_pipeline_runs_resolve_to_publish_against_test_db() -> None:
                 "WHERE r.slug = %s AND s.status = 'published'",
                 (_SLUG,),
             ).fetchone()[0]
-            assert published == 1
+            # One per-source summary (Wikipedia) plus one skipped consensus (a
+            # single source is below the two-source consensus threshold).
+            assert published == 2
     finally:
         _cleanup([_FINGERPRINT])
 
