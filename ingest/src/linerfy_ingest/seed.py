@@ -93,6 +93,8 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
             "excerpt_max_chars": policy_by_source[source.id].excerpt_max_chars,
             "attribution_required": policy_by_source[source.id].attribution_required,
             "removal_contact": policy_by_source[source.id].removal_contact,
+            "license_id": policy_by_source[source.id].license_id,
+            "license_url": policy_by_source[source.id].license_url,
         }
         for source in context.sources
     ]

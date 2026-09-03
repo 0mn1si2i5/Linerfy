@@ -23,6 +23,18 @@ class SourcePolicy(BaseModel):
     excerpt_max_chars: int = Field(gt=0, le=1000)
     attribution_required: bool = True
     removal_contact: str = Field(min_length=3)
+    license_id: str = Field(min_length=1)
+    license_url: str = Field(min_length=1)
+
+
+def license_pool(license_id: str) -> str:
+    """A source's compatibility pool is its license id.
+
+    Two documents may be summarized into one corpus only when they share the
+    same pool (identical license id); otherwise each pool is summarized
+    separately and never mixed into a single claim.
+    """
+    return license_id.strip()
 
 
 class ArtistEntity(BaseModel):

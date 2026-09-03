@@ -105,6 +105,8 @@ CRITIQUEBRAINZ_POLICY = SourcePolicy(
     excerpt_max_chars=280,
     attribution_required=True,
     removal_contact="rights@linerfy.local",
+    license_id="CC BY-NC-SA 3.0",
+    license_url="https://creativecommons.org/licenses/by-nc-sa/3.0/",
 )
 
 

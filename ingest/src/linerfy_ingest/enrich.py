@@ -10,7 +10,7 @@ from __future__ import annotations
 from .critiquebrainz import CritiqueBrainzAdapter
 from .critiquebrainz import to_document as cb_document
 from .entities import ReleaseGroup
-from .models import ReleaseEntity, ReviewDocument, Summary
+from .models import ReleaseEntity, ReviewDocument, Summary, license_pool
 from .summarize import CorpusDocument, summarize
 from .wikipedia import WikipediaAdapter
 from .wikipedia import to_document as wiki_document
@@ -29,6 +29,21 @@ def corpus_from_documents(documents: list[ReviewDocument]) -> list[CorpusDocumen
         )
         for document in documents
     ]
+
+
+def pool_for_document(document: ReviewDocument) -> str:
+    """The license-compatibility pool a document belongs to."""
+    return license_pool(document.policy.license_id)
+
+
+def group_by_pool(
+    documents: list[ReviewDocument],
+) -> dict[str, list[ReviewDocument]]:
+    """Partition documents so each license pool is summarized separately."""
+    grouped: dict[str, list[ReviewDocument]] = {}
+    for document in documents:
+        grouped.setdefault(pool_for_document(document), []).append(document)
+    return grouped
 
 
 def build_documents(
@@ -57,10 +72,19 @@ def enrich_release(
     *,
     model: str,
     chat,
-) -> Summary:
-    """Fetch sources and summarize them into a validated ``Summary``."""
+) -> dict[str, Summary]:
+    """Fetch sources and summarize each license pool separately.
+
+    Incompatible licenses are never merged into one corpus, so no claim can
+    cite documents from two different pools. The result maps pool id (a license
+    id) to that pool's validated summary.
+    """
     documents = build_documents(
         release_group, release, article_title, critiquebrainz, wikipedia
     )
-    corpus = corpus_from_documents(documents)
-    return summarize(corpus, model=model, chat=chat)
+    summaries: dict[str, Summary] = {}
+    for pool, pool_documents in group_by_pool(documents).items():
+        summaries[pool] = summarize(
+            corpus_from_documents(pool_documents), model=model, chat=chat
+        )
+    return summaries

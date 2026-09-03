@@ -107,6 +107,8 @@ GUARDIAN_POLICY = SourcePolicy(
     excerpt_max_chars=280,
     attribution_required=True,
     removal_contact="rights@linerfy.local",
+    license_id="proprietary",
+    license_url="https://www.theguardian.com/help/terms-of-service",
 )
 
 # Entity matching is a later slice; this hardcodes the one album the adapter is

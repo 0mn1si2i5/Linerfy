@@ -159,6 +159,8 @@ def _synthetic_context(title: str, claim_text: str) -> IngestedContext:
         excerpt_max_chars=280,
         attribution_required=True,
         removal_contact="rights@example.com",
+        license_id="CC0-1.0",
+        license_url="https://creativecommons.org/publicdomain/zero/1.0/",
     )
     document = ReviewDocument(
         id="synthetic-doc",

@@ -122,6 +122,8 @@ WIKIPEDIA_POLICY = SourcePolicy(
     excerpt_max_chars=280,
     attribution_required=True,
     removal_contact="rights@linerfy.local",
+    license_id="CC BY-SA 4.0",
+    license_url="https://creativecommons.org/licenses/by-sa/4.0/",
 )
 
 

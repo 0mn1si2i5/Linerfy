@@ -1,20 +1,27 @@
-"""Integration test composing entity resolution + source fetch + summarization.
+"""Tests for license-pool isolation in the enrichment composition.
 
 Uses the real adapter and summarizer code with fakes for the network and model,
-so a single test proves the v1 pipeline contracts line up end to end.
+so the tests prove that incompatible licenses are never merged into one corpus
+or one claim.
 """
 
 from __future__ import annotations
 
 import json
+import re
 
 from linerfy_ingest.critiquebrainz import CritiqueBrainzAdapter
 from linerfy_ingest.critiquebrainz import to_document as cb_document
-from linerfy_ingest.enrich import corpus_from_documents, enrich_release
+from linerfy_ingest.enrich import (
+    corpus_from_documents,
+    enrich_release,
+    group_by_pool,
+)
 from linerfy_ingest.entities import ReleaseGroup
-from linerfy_ingest.models import ReleaseEntity
+from linerfy_ingest.models import ReleaseEntity, ReviewDocument
 from linerfy_ingest.providers import ChatResult
 from linerfy_ingest.wikipedia import WikipediaAdapter
+from linerfy_ingest.wikipedia import to_document as wiki_document
 
 _RELEASE = ReleaseEntity(
     id="norman-fucking-rockwell",
@@ -65,32 +72,25 @@ class FakeWiki(WikipediaAdapter):
         return self.sections if "prop=sections" in url else self.wikitext
 
 
-def _chat(content: str):
+def _echo_chat():
+    """A fake chat that cites only documents actually present in its corpus."""
+
     def chat(messages):
-        return ChatResult(content=content, finish_reason="stop")
+        user = messages[-1]["content"]
+        ids = re.findall(r'<document id="([^"]+)"', user)
+        claims = [
+            {"text": f"观点 {i + 1}", "source_ids": [ids[i % len(ids)]]}
+            for i in range(3)
+        ]
+        return ChatResult(
+            content=json.dumps({"claims": claims}), finish_reason="stop"
+        )
 
     return chat
 
 
-def _claims_payload() -> str:
-    return json.dumps(
-        {
-            "claims": [
-                {"text": "一致好评。", "source_ids": ["critiquebrainz-cb-1"]},
-                {
-                    "text": "songwriting 被称赞。",
-                    "source_ids": ["wikipedia-norman-fucking-rockwell-reception"],
-                },
-                {
-                    "text": "听感华丽、克制。",
-                    "source_ids": [
-                        "critiquebrainz-cb-1",
-                        "wikipedia-norman-fucking-rockwell-reception",
-                    ],
-                },
-            ]
-        }
-    )
+def _claim_sources(summary) -> set[str]:
+    return {source for claim in summary.claims for source in claim.source_ids}
 
 
 def test_corpus_from_documents_maps_id_and_full_body() -> None:
@@ -101,20 +101,45 @@ def test_corpus_from_documents_maps_id_and_full_body() -> None:
     assert corpus[0].text == "A lush, sprawling record."
 
 
-def test_enrich_release_composes_fetch_and_summary() -> None:
-    summary = enrich_release(
+def test_group_by_pool_separates_incompatible_licenses() -> None:
+    reviews = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
+    wiki = FakeWiki(_WIKI_SECTIONS, _WIKI_TEXT).reception_section(
+        "Norman Fucking Rockwell!"
+    )
+    documents: list[ReviewDocument] = [
+        cb_document(reviews[0], _RELEASE),
+        wiki_document(wiki, _RELEASE, "Norman Fucking Rockwell!"),
+    ]
+    grouped = group_by_pool(documents)
+    assert set(grouped) == {"CC BY-NC-SA 3.0", "CC BY-SA 4.0"}
+
+
+def test_same_license_documents_share_one_pool() -> None:
+    reviews = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
+    doc1 = cb_document(reviews[0], _RELEASE)
+    doc2 = doc1.model_copy(update={"id": "critiquebrainz-cb-2"})
+    grouped = group_by_pool([doc1, doc2])
+    assert set(grouped) == {"CC BY-NC-SA 3.0"}
+    assert len(grouped["CC BY-NC-SA 3.0"]) == 2
+
+
+def test_enrich_release_partitions_by_pool_and_never_crosses() -> None:
+    summaries = enrich_release(
         _RELEASE,
         _RELEASE_GROUP,
         "Norman Fucking Rockwell!",
         FakeCB(_CB_PAYLOAD),
         FakeWiki(_WIKI_SECTIONS, _WIKI_TEXT),
         model="deepseek-chat",
-        chat=_chat(_claims_payload()),
+        chat=_echo_chat(),
     )
-    assert len(summary.claims) == 3
-    cited = {source for claim in summary.claims for source in claim.source_ids}
-    assert cited == {
-        "critiquebrainz-cb-1",
-        "wikipedia-norman-fucking-rockwell-reception",
-    }
-    assert summary.corpus_hash
+    assert set(summaries) == {"CC BY-NC-SA 3.0", "CC BY-SA 4.0"}
+
+    critiquebrainz = _claim_sources(summaries["CC BY-NC-SA 3.0"])
+    wikipedia = _claim_sources(summaries["CC BY-SA 4.0"])
+
+    assert critiquebrainz == {"critiquebrainz-cb-1"}
+    assert wikipedia == {"wikipedia-norman-fucking-rockwell-reception"}
+    # No summary's claims cite a source from the other pool.
+    assert critiquebrainz.isdisjoint(wikipedia)
+

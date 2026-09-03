@@ -41,7 +41,9 @@
         "retention_days": 30,
         "excerpt_max_chars": 280,
         "attribution_required": true,
-        "removal_contact": "rights@linerfy.local"
+        "removal_contact": "rights@linerfy.local",
+        "license_id": "proprietary",
+        "license_url": "https://pitchfork.com/contact"
       }
     },
     {
@@ -62,7 +64,9 @@
         "retention_days": 30,
         "excerpt_max_chars": 280,
         "attribution_required": true,
-        "removal_contact": "rights@linerfy.local"
+        "removal_contact": "rights@linerfy.local",
+        "license_id": "proprietary",
+        "license_url": "https://www.theguardian.com/help/terms-of-service"
       }
     }
   ],
