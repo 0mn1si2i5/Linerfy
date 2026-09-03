@@ -1,7 +1,7 @@
 """Real end-to-end pipeline test against the marked test database.
 
 This is the closest to a live E2E that can run unattended. The real job store,
-lease CAS, seed, SQL, and five-stage state machine run against a real Postgres;
+lease CAS, seed, SQL, and four-stage state machine run against a real Postgres;
 only the network boundary is stubbed — the MusicBrainz / CritiqueBrainz /
 Wikipedia HTTP clients and the model — because those are external, flaky, and
 (for the model) metered.
@@ -142,7 +142,7 @@ def _run_to_completion(store, handlers) -> None:
     raise AssertionError("pipeline did not reach an idle state")
 
 
-def test_pipeline_runs_resolve_to_publish_against_test_db() -> None:
+def test_pipeline_runs_resolve_to_consensus_against_test_db() -> None:
     with connect() as conn:
         skip_unless_test_db(conn)
 

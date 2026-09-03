@@ -17,7 +17,15 @@ from dataclasses import dataclass
 from .critiquebrainz import CRITIQUEBRAINZ_SOURCE, CritiqueBrainzAdapter
 from .db import connect, seed
 from .enrich import build_documents, corpus_from_documents
-from .jobs import EnrichmentJob, JobStore, JobUnavailable, Stage, StageHandler
+from .jobs import (
+    EnrichmentJob,
+    JobStore,
+    JobUnavailable,
+    Stage,
+    StageHandler,
+    assert_active_lease,
+    record_corpus_hash,
+)
 from .models import (
     ArtistEntity,
     IngestedContext,
@@ -31,11 +39,10 @@ from .request import NowPlayingRequest
 from .summarize import (
     StoredDocument,
     corpus_hash,
-    publish,
+    publish_consensus_skipped,
+    publish_summary,
     read_stored_documents,
     summarize,
-    write_consensus_skipped,
-    write_summary,
 )
 from .wikipedia import WIKIPEDIA_SOURCE, WikipediaAdapter
 
@@ -117,11 +124,16 @@ def _fetch_sources(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> boo
     context = IngestedContext(
         release=release, artist=artist, sources=sources, review_documents=documents
     )
+    # One transaction: verify the active lease, seed the corpus, and record the
+    # corpus hash together. An expired worker can neither write review documents
+    # nor record the corpus it fetched.
     with connect(autocommit=False) as conn:
+        assert_active_lease(conn, job.id, lease_id)
         seed(conn, context)
-    deps.store.set_corpus_hash(
-        job.id, lease_id, corpus_hash(corpus_from_documents(documents))
-    )
+        record_corpus_hash(
+            conn, job.id, lease_id, corpus_hash(corpus_from_documents(documents))
+        )
+        conn.commit()
     return True
 
 
@@ -140,9 +152,9 @@ def _group_by_pool(documents: list[StoredDocument]) -> dict[str, list[StoredDocu
 
 
 def _existing_source_summaries(conn, release_slug: str) -> dict[str, str]:
-    """Map source id -> corpus_hash of the current (candidate|published) summary.
+    """Map source id -> corpus_hash of the current published summary.
 
-    A source is only treated as "done" when its persisted generation was built
+    A source is only treated as "done" when its published generation was built
     from the same corpus hash, so a changed corpus triggers regeneration rather
     than a permanent skip.
     """
@@ -150,19 +162,19 @@ def _existing_source_summaries(conn, release_slug: str) -> dict[str, str]:
         "SELECT source_id, corpus_hash FROM public.summary_runs s "
         "JOIN public.releases r ON r.id = s.release_id "
         "WHERE r.slug = %s AND s.summary_kind = 'source' "
-        "AND s.status IN ('candidate', 'published')",
+        "AND s.status = 'published'",
         (release_slug,),
     ).fetchall()
     return {row[0]: row[1] for row in rows if row[0]}
 
 
 def _existing_consensus_pools(conn, release_slug: str) -> dict[str, str]:
-    """Map license pool -> corpus_hash of the current (candidate|published) block."""
+    """Map license pool -> corpus_hash of the current published block."""
     rows = conn.execute(
         "SELECT license_pool, corpus_hash FROM public.summary_runs s "
         "JOIN public.releases r ON r.id = s.release_id "
         "WHERE r.slug = %s AND s.summary_kind = 'consensus' "
-        "AND s.status IN ('candidate', 'published')",
+        "AND s.status = 'published'",
         (release_slug,),
     ).fetchall()
     return {row[0]: row[1] for row in rows}
@@ -195,7 +207,7 @@ def _build_source_summaries(job: EnrichmentJob, lease_id: str, deps: PipelineDep
             attribution=_attribution(first),
         )
         with connect(autocommit=False) as conn:
-            write_summary(conn, slug, summary, status="candidate")
+            publish_summary(conn, slug, summary, job_id=job.id, lease_id=lease_id)
         # A source summary is one bounded work unit; re-queue for the next one.
         deps.store.commit(job.id, lease_id, stage=job.stage, state="queued")
         return False
@@ -220,13 +232,15 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
         attribution = _attribution(first)
         if len(distinct_sources) < 2:
             with connect(autocommit=False) as conn:
-                write_consensus_skipped(
+                publish_consensus_skipped(
                     conn,
                     slug,
                     license_pool=pool,
                     license_url=first.license_url,
                     attribution=attribution,
                     corpus_hash=pool_hash,
+                    job_id=job.id,
+                    lease_id=lease_id,
                 )
         else:
             # Renew the lease before the model call so it cannot be reaped.
@@ -241,28 +255,11 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
                 attribution=attribution,
             )
             with connect(autocommit=False) as conn:
-                write_summary(conn, slug, consensus, status="candidate")
+                publish_summary(
+                    conn, slug, consensus, job_id=job.id, lease_id=lease_id
+                )
         deps.store.commit(job.id, lease_id, stage=job.stage, state="queued")
         return False
-    return True
-
-
-def _publish(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> bool:
-    # Summaries are written atomically as candidates; publish validates the
-    # candidate set exists and flips it to published, demoting the old set.
-    request = _request(job)
-    slug = _release_slug(request)
-    with connect() as conn:
-        candidates = conn.execute(
-            "SELECT count(*) FROM public.summary_runs s "
-            "JOIN public.releases r ON r.id = s.release_id "
-            "WHERE r.slug = %s AND s.status = 'candidate'",
-            (slug,),
-        ).fetchone()[0]
-    if not candidates:
-        raise RuntimeError("no candidate summaries to publish")
-    with connect(autocommit=False) as conn:
-        publish(conn, slug, job_id=job.id, lease_id=lease_id)
     return True
 
 
@@ -280,7 +277,12 @@ def _as_corpus(documents: list[StoredDocument]):
 
 
 def build_handlers(deps: PipelineDeps) -> dict[Stage, StageHandler]:
-    """The real five-stage handler map, constructed from live dependencies."""
+    """The real four-stage handler map, constructed from live dependencies.
+
+    Each summary/consensus block publishes itself in a single transaction, so
+    there is no release-wide publish stage: a job reaches ``ready`` when every
+    source summary and license-pool block is published.
+    """
     return {
         "resolve_entity": lambda job, lease_id: _resolve_entity(job, lease_id, deps),
         "fetch_sources": lambda job, lease_id: _fetch_sources(job, lease_id, deps),
@@ -288,5 +290,4 @@ def build_handlers(deps: PipelineDeps) -> dict[Stage, StageHandler]:
             job, lease_id, deps
         ),
         "build_consensus": lambda job, lease_id: _build_consensus(job, lease_id, deps),
-        "publish": lambda job, lease_id: _publish(job, lease_id, deps),
     }

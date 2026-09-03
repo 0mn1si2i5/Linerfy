@@ -14,7 +14,12 @@ import pytest
 from _db_helpers import skip_unless_test_db
 
 from linerfy_ingest.db import connect
-from linerfy_ingest.jobs import PostgresJobStore, StaleLease
+from linerfy_ingest.jobs import (
+    PostgresJobStore,
+    StaleLease,
+    assert_active_lease,
+    record_corpus_hash,
+)
 
 pytestmark = pytest.mark.skipif(
     not (
@@ -161,6 +166,76 @@ def test_renew_extends_lease_and_rejects_stale_lease() -> None:
             store.renew(claimed.job.id, claimed.lease_id)
     finally:
         _delete_job("lease-5")
+
+
+def test_commit_rejected_when_lease_expired_with_matching_id() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "lease-7")
+        store = PostgresJobStore()
+        claimed = store.reap_and_claim()
+        assert claimed is not None
+        # The id and lease_id both still match; only the lease has lapsed. The
+        # active-lease predicate (state='running' AND lease_expires_at > now())
+        # must refuse the write, unlike the old id+lease_id-only comparison.
+        with connect() as conn:
+            conn.execute(
+                "UPDATE public.enrichment_jobs SET lease_expires_at = now() - interval '1 second' "
+                "WHERE entity_id = 'lease-7'"
+            )
+        with pytest.raises(StaleLease):
+            store.commit(claimed.job.id, claimed.lease_id, stage=None, state="ready")
+    finally:
+        _delete_job("lease-7")
+
+
+def test_active_lease_helpers_reject_expired_lease() -> None:
+    # The fetch_sources path guards seed + corpus recording with these helpers;
+    # an expired lease must fence both off even when id and lease_id match.
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "lease-8")
+        store = PostgresJobStore()
+        claimed = store.reap_and_claim()
+        assert claimed is not None
+        with connect() as conn:
+            conn.execute(
+                "UPDATE public.enrichment_jobs SET lease_expires_at = now() - interval '1 second' "
+                "WHERE entity_id = 'lease-8'"
+            )
+        with connect() as conn:
+            with pytest.raises(StaleLease):
+                assert_active_lease(conn, claimed.job.id, claimed.lease_id)
+            with pytest.raises(StaleLease):
+                record_corpus_hash(conn, claimed.job.id, claimed.lease_id, "corpus-1")
+    finally:
+        _delete_job("lease-8")
+
+
+def test_active_lease_helpers_accept_valid_lease() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "lease-9")
+        store = PostgresJobStore()
+        claimed = store.reap_and_claim()
+        assert claimed is not None
+        with connect(autocommit=False) as conn:
+            assert_active_lease(conn, claimed.job.id, claimed.lease_id)
+            record_corpus_hash(conn, claimed.job.id, claimed.lease_id, "corpus-9")
+            conn.commit()
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT corpus_hash FROM public.enrichment_jobs WHERE entity_id = 'lease-9'"
+            ).fetchone()
+            assert row[0] == "corpus-9"
+    finally:
+        _delete_job("lease-9")
 
 
 def test_timeout_reap_runs_real_sql_and_requeues() -> None:

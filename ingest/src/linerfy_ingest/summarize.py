@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-from .jobs import StaleLease
+from .jobs import assert_active_lease
 from .models import CitedClaim, Summary
 from .seed import stable_uuid
 
@@ -183,18 +183,6 @@ def summarize(
     )
 
 
-def read_corpus(conn, release_slug: str) -> list[CorpusDocument]:
-    """Read a release's published document bodies into a summarizer corpus."""
-    release_id = uuid.UUID(stable_uuid("release", release_slug))
-    rows = conn.execute(
-        "SELECT d.slug, b.content FROM public.review_documents d "
-        "JOIN public.review_document_bodies b ON b.document_id = d.id "
-        "WHERE d.release_id = %s AND d.status = 'published'",
-        (release_id,),
-    ).fetchall()
-    return [CorpusDocument(id=slug, text=content) for slug, content in rows]
-
-
 @dataclass(frozen=True)
 class StoredDocument:
     """A persisted review document with the source/license facts a stage needs."""
@@ -250,82 +238,127 @@ def _scope_key(summary: Summary) -> str:
     return f"source::{scope}"
 
 
-def write_summary(
-    conn, release_slug: str, summary: Summary, *, status: str = "candidate"
+def _publish_generation(
+    conn,
+    release_id: uuid.UUID,
+    scope: str,
+    *,
+    corpus_hash: str,
+    model: str,
+    prompt_version: str,
+    locale: str,
+    generated_at: datetime,
+    kind: str,
+    license_pool: str,
+    license_url: str,
+    source_id: str | None,
+    attribution: str,
+    ai_modified: bool,
+    skipped_reason: str | None,
+    claims: list[CitedClaim],
 ) -> str:
-    """Write one summary generation immutably and return its run id.
+    """Supersede the current published run for one scope and insert a new one.
 
-    A candidate is a brand-new row: it never overwrites an existing published
-    generation, so a failed or superseded publish leaves the prior published
-    version intact. A safe retry with the same ``corpus_hash`` for the same
-    scope is a no-op (returns the existing run), so it cannot duplicate a
-    generation.
+    Idempotent on ``(scope, corpus_hash)``: a safe retry with the same corpus
+    returns the existing published run and never duplicates a generation. The
+    claim_sources foreign key keeps every citation inside the stored corpus.
+    """
+    existing = conn.execute(
+        "SELECT id FROM public.summary_runs "
+        "WHERE release_id = %s AND scope = %s AND corpus_hash = %s "
+        "AND status = 'published'",
+        (release_id, scope, corpus_hash),
+    ).fetchone()
+    if existing is not None:
+        return str(existing[0])
+
+    # Supersede first so the unique published-per-scope index is never violated.
+    conn.execute(
+        "UPDATE public.summary_runs SET status = 'superseded' "
+        "WHERE release_id = %s AND scope = %s AND status = 'published'",
+        (release_id, scope),
+    )
+    run_id = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO public.summary_runs "
+        "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
+        " status, summary_kind, license_pool, license_url, source_id, attribution, "
+        " ai_modified, skipped_reason, scope, published_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,'published',%s,%s,%s,%s,%s,%s,%s,%s,now())",
+        (
+            run_id,
+            release_id,
+            model,
+            prompt_version,
+            locale,
+            corpus_hash,
+            generated_at,
+            kind,
+            license_pool,
+            license_url,
+            source_id,
+            attribution,
+            ai_modified,
+            skipped_reason,
+            scope,
+        ),
+    )
+    for order, claim in enumerate(claims):
+        claim_id = uuid.uuid4()
+        conn.execute(
+            "INSERT INTO public.claims (id, summary_run_id, claim_order, claim_text) "
+            "VALUES (%s,%s,%s,%s)",
+            (claim_id, run_id, order, claim.text),
+        )
+        for document_slug in claim.source_ids:
+            document_id = uuid.UUID(stable_uuid("document", document_slug))
+            conn.execute(
+                "INSERT INTO public.claim_sources (claim_id, document_id) "
+                "VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                (claim_id, document_id),
+            )
+    return str(run_id)
+
+
+def publish_summary(
+    conn, release_slug: str, summary: Summary, *, job_id: str, lease_id: str
+) -> str:
+    """Write one summary generation directly as the current published version.
+
+    The model call happens outside this transaction. In one short transaction:
+    verify the active lease, check the claim count, supersede the old published
+    generation for this scope, and insert the new published one with its claims
+    and citations. A failure rolls back, leaving the old published version intact.
 
     ``conn`` must be in transactional (non-autocommit) mode.
     """
     release_id = uuid.UUID(stable_uuid("release", release_slug))
     scope = _scope_key(summary)
     with conn.transaction():
-        existing = conn.execute(
-            "SELECT id FROM public.summary_runs "
-            "WHERE release_id = %s AND scope = %s AND corpus_hash = %s "
-            "AND status IN ('candidate', 'published')",
-            (release_id, scope, summary.corpus_hash),
-        ).fetchone()
-        if existing is not None:
-            return str(existing[0])
-
-        # A changed corpus supersedes any in-flight candidate for this scope, so
-        # at most one candidate coexists with the one published generation.
-        conn.execute(
-            "UPDATE public.summary_runs SET status = 'superseded' "
-            "WHERE release_id = %s AND scope = %s AND status = 'candidate'",
-            (release_id, scope),
+        assert_active_lease(conn, job_id, lease_id)
+        if summary.skipped_reason is None and not (3 <= len(summary.claims) <= 5):
+            raise ValueError(f"summary for {scope} has {len(summary.claims)} claims")
+        return _publish_generation(
+            conn,
+            release_id,
+            scope,
+            corpus_hash=summary.corpus_hash,
+            model=summary.model,
+            prompt_version=summary.prompt_version,
+            locale=summary.locale,
+            generated_at=summary.generated_at,
+            kind=summary.kind,
+            license_pool=summary.license_pool,
+            license_url=summary.license_url,
+            source_id=summary.source_id,
+            attribution=summary.attribution,
+            ai_modified=summary.ai_modified,
+            skipped_reason=summary.skipped_reason,
+            claims=summary.claims,
         )
-        run_id = uuid.uuid4()
-        conn.execute(
-            "INSERT INTO public.summary_runs "
-            "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
-            " status, summary_kind, license_pool, license_url, source_id, attribution, "
-            " ai_modified, skipped_reason, scope) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (
-                run_id,
-                release_id,
-                summary.model,
-                summary.prompt_version,
-                summary.locale,
-                summary.corpus_hash,
-                summary.generated_at,
-                status,
-                summary.kind,
-                summary.license_pool,
-                summary.license_url,
-                summary.source_id,
-                summary.attribution,
-                summary.ai_modified,
-                summary.skipped_reason,
-                scope,
-            ),
-        )
-        for order, claim in enumerate(summary.claims):
-            claim_id = uuid.uuid4()
-            conn.execute(
-                "INSERT INTO public.claims (id, summary_run_id, claim_order, claim_text) "
-                "VALUES (%s,%s,%s,%s)",
-                (claim_id, run_id, order, claim.text),
-            )
-            for source_id in claim.source_ids:
-                document_id = uuid.UUID(stable_uuid("document", source_id))
-                conn.execute(
-                    "INSERT INTO public.claim_sources (claim_id, document_id) "
-                    "VALUES (%s,%s) ON CONFLICT DO NOTHING",
-                    (claim_id, document_id),
-                )
-    return str(run_id)
 
 
-def write_consensus_skipped(
+def publish_consensus_skipped(
     conn,
     release_slug: str,
     *,
@@ -334,123 +367,30 @@ def write_consensus_skipped(
     attribution: str,
     corpus_hash: str = "",
     reason: str = "insufficient-sources",
-    status: str = "candidate",
+    job_id: str,
+    lease_id: str,
 ) -> str:
-    """Record that a pool's consensus was legitimately not generated (fewer than
-    two distinct sources) as an immutable generation with no claims."""
+    """Publish a pool's legitimately-not-generated consensus (fewer than two
+    distinct sources) as the current published block with no claims."""
     release_id = uuid.UUID(stable_uuid("release", release_slug))
     scope = f"consensus::{license_pool}"
     with conn.transaction():
-        existing = conn.execute(
-            "SELECT id FROM public.summary_runs "
-            "WHERE release_id = %s AND scope = %s AND corpus_hash = %s "
-            "AND status IN ('candidate', 'published')",
-            (release_id, scope, corpus_hash),
-        ).fetchone()
-        if existing is not None:
-            return str(existing[0])
-
-        # A changed corpus supersedes any in-flight candidate for this scope
-        # (e.g. a consensus that became skippable, or vice versa).
-        conn.execute(
-            "UPDATE public.summary_runs SET status = 'superseded' "
-            "WHERE release_id = %s AND scope = %s AND status = 'candidate'",
-            (release_id, scope),
+        assert_active_lease(conn, job_id, lease_id)
+        return _publish_generation(
+            conn,
+            release_id,
+            scope,
+            corpus_hash=corpus_hash,
+            model="",
+            prompt_version="consensus-skip",
+            locale="zh-CN",
+            generated_at=datetime.now(UTC),
+            kind="consensus",
+            license_pool=license_pool,
+            license_url=license_url,
+            source_id=None,
+            attribution=attribution,
+            ai_modified=True,
+            skipped_reason=reason,
+            claims=[],
         )
-        run_id = uuid.uuid4()
-        conn.execute(
-            "INSERT INTO public.summary_runs "
-            "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
-            " status, summary_kind, license_pool, license_url, source_id, attribution, "
-            " ai_modified, skipped_reason, scope) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (
-                run_id,
-                release_id,
-                "",
-                "consensus-skip",
-                "zh-CN",
-                corpus_hash,
-                datetime.now(UTC),
-                status,
-                "consensus",
-                license_pool,
-                license_url,
-                None,
-                attribution,
-                True,
-                reason,
-                scope,
-            ),
-        )
-    return str(run_id)
-
-
-def publish(
-    conn, release_slug: str, *, job_id: str | None = None, lease_id: str | None = None
-) -> int:
-    """Atomically promote the candidate set and supersede the prior published set.
-
-    The publish stage re-validates the lease (when a ``job_id``/``lease_id`` is
-    supplied) so a stale worker can never publish; validates every candidate is
-    complete (3-5 claims, or a legitimately skipped consensus, with all citations
-    in this release's corpus); then flips candidates to ``published`` and demotes
-    the old published generations to ``superseded`` per scope in one transaction.
-    """
-    release_id = uuid.UUID(stable_uuid("release", release_slug))
-    with conn.transaction():
-        if job_id is not None and lease_id is not None:
-            owned = conn.execute(
-                "SELECT 1 FROM public.enrichment_jobs "
-                "WHERE id = %s AND lease_id = %s",
-                (job_id, lease_id),
-            ).fetchone()
-            if owned is None:
-                raise StaleLease("lease expired; refusing to publish")
-
-        candidates = conn.execute(
-            "SELECT id, scope, skipped_reason FROM public.summary_runs "
-            "WHERE release_id = %s AND status = 'candidate'",
-            (release_id,),
-        ).fetchall()
-        if not candidates:
-            raise RuntimeError("publish requires a candidate set")
-        candidate_ids = [row[0] for row in candidates]
-        scopes = [row[1] for row in candidates]
-
-        # Every non-skipped candidate must carry 3-5 claims; a skipped consensus
-        # has none by design. All citations must stay within this release.
-        for run_id, _scope, skipped_reason in candidates:
-            if skipped_reason is not None:
-                continue
-            claim_count = conn.execute(
-                "SELECT count(*) FROM public.claims WHERE summary_run_id = %s",
-                (run_id,),
-            ).fetchone()[0]
-            if not (3 <= claim_count <= 5):
-                raise RuntimeError(
-                    f"candidate {run_id} has {claim_count} claims; refusing to publish"
-                )
-        stray = conn.execute(
-            "SELECT count(*) FROM public.claim_sources cs "
-            "JOIN public.claims c ON c.id = cs.claim_id "
-            "JOIN public.review_documents d ON d.id = cs.document_id "
-            "WHERE c.summary_run_id = ANY(%s::uuid[]) AND d.release_id != %s",
-            (candidate_ids, release_id),
-        ).fetchone()[0]
-        if stray:
-            raise RuntimeError("candidate cites documents from another release")
-
-        # Supersede the old published generations first (so the unique
-        # (release, scope) published index is not violated), then promote.
-        written = conn.execute(
-            "UPDATE public.summary_runs SET status = 'superseded' "
-            "WHERE release_id = %s AND scope = ANY(%s::text[]) AND status = 'published'",
-            (release_id, scopes),
-        ).rowcount
-        written += conn.execute(
-            "UPDATE public.summary_runs SET status = 'published', published_at = now() "
-            "WHERE id = ANY(%s::uuid[])",
-            (candidate_ids,),
-        ).rowcount
-    return written

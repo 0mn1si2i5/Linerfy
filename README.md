@@ -53,21 +53,18 @@ pnpm --filter @linerfy/web dev       # API + OAuth + smoke
 
 macOS requests Automation permission on first access. Only current-track metadata crosses the narrow preload bridge; player metadata is always treated as untrusted input.
 
-## 采集与总结命令 / Ingestion commands
+## 采集与运行命令 / Ingestion & admin
 
 无参数运行只显示帮助并退出，绝不写数据库。Running with no arguments prints help and exits, never writing.
 
 ```bash
 cd ingest
-
-# 总结：读取已入库正文，调用模型生成可追溯总结，原子写入（模型网络调用在事务外）。
-python -m linerfy_ingest --summarize <release-slug>
-
-# fixture 仅用于本地/标记测试库，且只 insert-only、不覆盖已存在记录。
-LINERFY_RESET_ALLOWED=1 python -m linerfy_ingest --fixture
-
-# 准备专用测试库：迁移并打标记（仅本地/标记库）。
-python -m linerfy_ingest --prepare-test-db
+python -m linerfy_ingest --run-enrichment   # 运行一个 worker tick
+python -m linerfy_ingest --pause            # 全局暂停模型生成
+python -m linerfy_ingest --resume           # 恢复模型生成
+python -m linerfy_ingest --jobs             # 列出 enrichment 队列
+python -m linerfy_ingest --retry-failed     # 重新入队失败任务
+python -m linerfy_ingest --purge            # 清理过期私有正文
 ```
 
 ## 验证 / Verification
@@ -88,8 +85,7 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 > 以下标注依据 fresh 验证（测试 + 类型检查 + 构建 + 代码路径），不代表生产联调通过。
 
-- **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；Web 页面认证门禁（`/` 与 `/context/[slug]` 只读已认证 API，service-role 仅在服务端）；可追溯中文总结（模型边界、原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 五阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus → publish`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
-- **验收中（R10）**：真实 E2E 测试（M8）；桌面打包 exit-0 证据与本地包启动 smoke。
+- **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；Web 页面认证门禁（`/` 与 `/context/[slug]` 只读已认证 API，service-role 仅在服务端）；可追溯中文总结（模型边界、按 scope 原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 四阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
 - **真实 OAuth 联调待用户配置**：GitHub OAuth app + Supabase provider + 重定向 URL 白名单 + 数字 ID 白名单尚未就绪；生产 Supabase 迁移与 Vercel 部署尚未执行。代码路径已通，端到端联调需以上配置后方可验收。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。

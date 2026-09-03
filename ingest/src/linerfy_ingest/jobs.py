@@ -33,7 +33,6 @@ Stage = Literal[
     "fetch_sources",
     "build_source_summaries",
     "build_consensus",
-    "publish",
 ]
 JobState = Literal["queued", "running", "ready", "unavailable", "failed"]
 
@@ -42,7 +41,6 @@ STAGES: tuple[Stage, ...] = (
     "fetch_sources",
     "build_source_summaries",
     "build_consensus",
-    "publish",
 )
 # Stages that invoke a model; paused while the global model-generation flag is on.
 MODEL_STAGES: frozenset[Stage] = frozenset(
@@ -104,6 +102,48 @@ class JobUnavailable(Exception):
     """Raised by a stage to mark a job terminally unavailable (no retry)."""
 
 
+# The single "active lease" invariant: a worker may only write results for a job
+# it still owns, while the job is running, and before the lease has expired. A
+# stale worker whose lease was reaped must fail the CAS just like a wrong id or
+# lease id. Every job mutation and every summary publish shares this predicate.
+_ACTIVE_LEASE_PREDICATE = "state = 'running' AND lease_expires_at > now()"
+
+
+def assert_active_lease(conn: psycopg.Connection, job_id: str, lease_id: str) -> None:
+    """Raise ``StaleLease`` unless the job is running under an unexpired lease.
+
+    Used at the start of a write transaction (e.g. seeding review documents or
+    publishing a summary) so an expired worker can neither overwrite the corpus
+    nor publish a summary. The write that follows re-checks the same predicate
+    in its own WHERE clause, so this guard is an early-out, not the fence.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM public.enrichment_jobs "
+        "WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
+        (job_id, lease_id),
+    ).fetchone()
+    if row is None:
+        raise StaleLease("lease is not active; refusing to write")
+
+
+def record_corpus_hash(
+    conn: psycopg.Connection, job_id: str, lease_id: str, corpus_hash: str
+) -> None:
+    """Update the job's corpus hash on an already-open transaction.
+
+    Shares the active-lease predicate with the other job mutations, so an
+    expired worker can neither seed the corpus it fetched nor record it. The
+    caller opens the transaction and commits it; this only mutates the row.
+    """
+    cursor = conn.execute(
+        "UPDATE public.enrichment_jobs SET corpus_hash = %s, updated_at = now() "
+        "WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
+        (corpus_hash, job_id, lease_id),
+    )
+    if cursor.rowcount == 0:
+        raise StaleLease("lease is not active; refusing to record corpus")
+
+
 class JobStore(Protocol):
     """Queue operations the worker performs, each a short transaction."""
 
@@ -125,8 +165,6 @@ class JobStore(Protocol):
     def renew(self, job_id: str, lease_id: str) -> None: ...
 
     def fail(self, job_id: str, lease_id: str, error: str) -> None: ...
-
-    def set_corpus_hash(self, job_id: str, lease_id: str, corpus_hash: str) -> None: ...
 
     def set_resolution(
         self, job_id: str, lease_id: str, release_group_id: str | None, status: str
@@ -295,7 +333,7 @@ class PostgresJobStore:
                 "UPDATE public.enrichment_jobs SET stage = COALESCE(%s, stage), "
                 "state = %s, lease_id = NULL, lease_expires_at = NULL, "
                 "last_error = NULL, updated_at = now() "
-                "WHERE id = %s AND lease_id = %s",
+                "WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
                 (stage, state, job_id, lease_id),
             )
             self._assert_cas(cursor)
@@ -312,7 +350,7 @@ class PostgresJobStore:
             cursor = conn.execute(
                 "UPDATE public.enrichment_jobs SET "
                 "lease_expires_at = now() + make_interval(secs => %s), "
-                "updated_at = now() WHERE id = %s AND lease_id = %s",
+                "updated_at = now() WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
                 (self.lease_seconds, job_id, lease_id),
             )
             self._assert_cas(cursor)
@@ -324,18 +362,8 @@ class PostgresJobStore:
                 "UPDATE public.enrichment_jobs SET retry_count = retry_count + 1, "
                 "state = CASE WHEN retry_count < %s THEN 'queued' ELSE 'failed' END, "
                 "last_error = %s, lease_id = NULL, lease_expires_at = NULL, "
-                "updated_at = now() WHERE id = %s AND lease_id = %s",
+                "updated_at = now() WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
                 (MAX_RETRIES, error, job_id, lease_id),
-            )
-            self._assert_cas(cursor)
-            conn.commit()
-
-    def set_corpus_hash(self, job_id: str, lease_id: str, corpus_hash: str) -> None:
-        with connect(autocommit=False) as conn:
-            cursor = conn.execute(
-                "UPDATE public.enrichment_jobs SET corpus_hash = %s, "
-                "updated_at = now() WHERE id = %s AND lease_id = %s",
-                (corpus_hash, job_id, lease_id),
             )
             self._assert_cas(cursor)
             conn.commit()
@@ -347,7 +375,7 @@ class PostgresJobStore:
             cursor = conn.execute(
                 "UPDATE public.enrichment_jobs SET resolved_release_group_id = %s, "
                 "resolution_status = %s, updated_at = now() "
-                "WHERE id = %s AND lease_id = %s",
+                "WHERE id = %s AND lease_id = %s AND " + _ACTIVE_LEASE_PREDICATE,
                 (release_group_id, status, job_id, lease_id),
             )
             self._assert_cas(cursor)

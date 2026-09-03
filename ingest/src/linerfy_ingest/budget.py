@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
+from .admin import set_pause
 from .db import connect
 from .providers import TokenUsage
 
@@ -80,11 +80,6 @@ def estimate_cost_cny(usage: TokenUsage, rate: ModelRate) -> float:
     return cost / 1_000_000
 
 
-def worst_case_usage(max_tokens: int) -> TokenUsage:
-    """Conservative pre-call estimate: assume the full budget on both sides."""
-    return TokenUsage(input=max_tokens, output=max_tokens)
-
-
 # A small, explicit safety margin applied on top of the per-token worst case, so
 # rounding, per-request overhead, and multi-part pricing can never push a real
 # call just past the cap.
@@ -105,112 +100,6 @@ def reserve_cost_cny(rate: ModelRate, input_tokens: int, max_output_tokens: int)
         cache_write=input_tokens,
     )
     return estimate_cost_cny(usage, rate) * SAFETY_MARGIN
-
-
-@dataclass
-class LedgerEntry:
-    request_id: str
-    model: str
-    kind: str  # "reserved" | "settled"
-    cost_cny: float
-    usage: TokenUsage = field(default_factory=TokenUsage)
-
-
-class BudgetLedger:
-    """Persists ledger entries to a JSON file; reads and writes are atomic.
-
-    ``check`` reserves a worst-case estimate before a real call; ``settle``
-    records the actual usage and cost after. Both fail closed on an unknown or
-    unrated model.
-    """
-
-    def __init__(
-        self,
-        path: str,
-        *,
-        budget_yuan: float = BUDGET_YUAN,
-        rates: dict[str, ModelRate] | None = None,
-    ) -> None:
-        self.path = path
-        self.budget_yuan = budget_yuan
-        self.rates = rates if rates is not None else load_rates(os.environ.get("MODEL_RATES_JSON"))
-        self._entries = self._load()
-
-    def _load(self) -> list[LedgerEntry]:
-        try:
-            raw = json.loads(Path(self.path).read_text())
-        except (OSError, ValueError):
-            return []
-        return [
-            LedgerEntry(
-                request_id=e.get("request_id", ""),
-                model=e.get("model", ""),
-                kind=e.get("kind", "settled"),
-                cost_cny=float(e.get("cost_cny", 0)),
-                usage=TokenUsage(
-                    input=int(e.get("input", 0)),
-                    output=int(e.get("output", 0)),
-                    cache_read=int(e.get("cache_read", 0)),
-                    cache_write=int(e.get("cache_write", 0)),
-                ),
-            )
-            for e in raw
-        ]
-
-    def _write(self) -> None:
-        payload = [
-            {
-                "request_id": e.request_id,
-                "model": e.model,
-                "kind": e.kind,
-                "cost_cny": round(e.cost_cny, 6),
-                "input": e.usage.input,
-                "output": e.usage.output,
-                "cache_read": e.usage.cache_read,
-                "cache_write": e.usage.cache_write,
-            }
-            for e in self._entries
-        ]
-        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        tmp = f"{self.path}.{uuid.uuid4().hex}.tmp"
-        Path(tmp).write_text(json.dumps(payload, indent=2))
-        os.replace(tmp, self.path)
-
-    def rate(self, model: str) -> ModelRate:
-        rate = self.rates.get(model)
-        if rate is None:
-            raise BudgetError(f"unknown model {model!r}; refusing real call")
-        return rate
-
-    def committed_cny(self) -> float:
-        return sum(entry.cost_cny for entry in self._entries)
-
-    def check(self, model: str, max_tokens: int) -> None:
-        """Reserve a worst-case estimate before a real call."""
-        rate = self.rate(model)
-        worst = estimate_cost_cny(worst_case_usage(max_tokens), rate)
-        if self.committed_cny() + worst > self.budget_yuan:
-            raise BudgetError(
-                f"budget exhausted ({self.committed_cny():.4f} CNY committed)"
-            )
-
-    def settle(
-        self, model: str, usage: TokenUsage, request_id: str | None = None
-    ) -> float:
-        """Record actual usage after a call; returns the estimated CNY cost."""
-        rate = self.rate(model)
-        cost = estimate_cost_cny(usage, rate)
-        self._entries.append(
-            LedgerEntry(
-                request_id=request_id or uuid.uuid4().hex,
-                model=model,
-                kind="settled",
-                cost_cny=cost,
-                usage=usage,
-            )
-        )
-        self._write()
-        return cost
 
 
 class DbBudgetLedger:
@@ -335,7 +224,13 @@ class DbBudgetLedger:
         model: str,
         usage: TokenUsage,
     ) -> float:
-        """Release the reservation and record the actual cost; idempotent."""
+        """Release the reservation and record the actual cost; idempotent.
+
+        If the actual cost exceeds the reserved worst-case bound, the real cost
+        is still recorded, the global model-generation pause is set, and a
+        ``BudgetError`` is raised so the caller fails closed instead of silently
+        pretending the hard cap still holds.
+        """
         rate = self.rate(model)
         actual = estimate_cost_cny(usage, rate)
         with connect(autocommit=False) as conn:
@@ -351,9 +246,11 @@ class DbBudgetLedger:
                 return float(settled_cny or 0.0)  # already settled; idempotent
             if status == "expired":
                 raise BudgetError(f"request {request_id} was already released/expired")
+            overrun = actual > float(reserved or 0.0)
             conn.execute(
                 "UPDATE public.model_budget "
-                "SET reserved_cny = reserved_cny - %s, committed_cny = committed_cny + %s "
+                "SET reserved_cny = GREATEST(0, reserved_cny - %s), "
+                "committed_cny = committed_cny + %s "
                 "WHERE id = 1",
                 (float(reserved or 0.0), actual),
             )
@@ -371,6 +268,13 @@ class DbBudgetLedger:
                     request_id,
                 ),
             )
+            if overrun:
+                set_pause(conn, True)
+                conn.commit()
+                raise BudgetError(
+                    f"actual cost {actual:.6f} CNY exceeded reservation "
+                    f"{float(reserved or 0.0):.6f}; pausing model calls"
+                )
             conn.commit()
         return actual
 

@@ -37,9 +37,6 @@ class FakeStore:
     def fail(self, job_id, lease_id, error):
         raise AssertionError(f"unexpected fail: {error}")
 
-    def set_corpus_hash(self, job_id, lease_id, corpus_hash):
-        raise AssertionError("resolve must not set a corpus hash")
-
 
 class FakeMB(MusicBrainzAdapter):
     def __init__(self, search_result, lookup_result):
@@ -65,14 +62,13 @@ def _deps(store, musicbrainz) -> PipelineDeps:
     )
 
 
-def test_build_handlers_has_all_five_stages() -> None:
+def test_build_handlers_has_all_four_stages() -> None:
     handlers = build_handlers(_deps(FakeStore(), FakeMB([], None)))
     assert set(handlers) == {
         "resolve_entity",
         "fetch_sources",
         "build_source_summaries",
         "build_consensus",
-        "publish",
     }
 
 

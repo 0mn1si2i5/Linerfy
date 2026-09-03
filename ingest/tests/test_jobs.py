@@ -39,9 +39,6 @@ class FakeStore:
     def fail(self, job_id, lease_id, error):
         self.actions.append(("fail", error))
 
-    def set_corpus_hash(self, job_id, lease_id, corpus_hash):
-        self.actions.append(("corpus_hash", corpus_hash))
-
     def set_resolution(self, job_id, lease_id, release_group_id, status):
         self.actions.append(("resolution", release_group_id, status))
 
@@ -54,8 +51,8 @@ def _job(stage, retry_count=0):
 
 def test_next_stage_walks_the_pipeline() -> None:
     assert next_stage("resolve_entity") == "fetch_sources"
-    assert next_stage("build_consensus") == "publish"
-    assert next_stage("publish") is None
+    assert next_stage("build_source_summaries") == "build_consensus"
+    assert next_stage("build_consensus") is None
 
 
 def test_run_job_advances_to_next_stage() -> None:
@@ -64,9 +61,14 @@ def test_run_job_advances_to_next_stage() -> None:
     assert store.actions == [("commit", "fetch_sources", "queued")]
 
 
-def test_run_job_completes_after_publish() -> None:
+def test_run_job_completes_after_build_consensus() -> None:
     store = FakeStore()
-    run_job(_job("publish"), "lease-1", {"publish": lambda j, lease: True}, store)
+    run_job(
+        _job("build_consensus"),
+        "lease-1",
+        {"build_consensus": lambda j, lease: True},
+        store,
+    )
     assert store.actions == [("commit", None, "ready")]
 
 

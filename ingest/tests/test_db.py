@@ -1,6 +1,5 @@
 import pytest
-
-from linerfy_ingest.db import _reset_permitted
+from _db_helpers import _reset_permitted
 
 
 def test_reset_permitted_for_local_host() -> None:

@@ -54,14 +54,19 @@ def _resolve_model():
     )
 
 
-def _estimate_input_tokens(messages: list[dict[str, str]]) -> int:
-    """A conservative upper bound on the prompt token count (~2 chars/token).
+_PER_MESSAGE_OVERHEAD = 4  # role separator + protocol framing, in tokens
 
-    This over-estimates for CJK text (which is closer to one token per
-    character) so the pre-call reservation can never under-bill the prompt.
+
+def _estimate_input_tokens(messages: list[dict[str, str]]) -> int:
+    """A conservative upper bound on the prompt token count.
+
+    Uses the UTF-8 byte length of each message as the content bound (a token is
+    never larger than a few bytes, and CJK characters are ~3 bytes but ~1
+    token), plus a small fixed per-message overhead. This over-estimates both
+    CJK and ASCII, so the pre-call reservation can never under-bill the prompt.
     """
-    total = sum(len(m.get("content", "")) for m in messages)
-    return max(1, total // 2 + 1)
+    total = sum(len(m.get("content", "").encode("utf-8")) for m in messages)
+    return max(1, total + _PER_MESSAGE_OVERHEAD * len(messages))
 
 
 def build_worker_handlers(

@@ -278,6 +278,48 @@ def test_concurrent_reserves_never_exceed_the_cap() -> None:
         _reset_budget()
 
 
+def test_settle_overrun_pauses_and_fails_closed() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        ledger = DbBudgetLedger(budget_yuan=100.0)
+        request_id = uuid.uuid4().hex
+        # Reserve a tiny worst case, then settle with far more tokens than the
+        # reservation anticipated — the model returned beyond its cap.
+        ledger.reserve(
+            model="deepseek-chat",
+            input_tokens=1,
+            max_output_tokens=1,
+            request_id=request_id,
+        )
+        with pytest.raises(BudgetError, match="pausing model calls"):
+            ledger.settle(
+                request_id=request_id,
+                model="deepseek-chat",
+                usage=TokenUsage(input=1000, output=1000),
+            )
+        with connect() as conn:
+            # Real cost is recorded, the reservation is released, and the global
+            # pause flag is set (fail-closed) rather than silently under-billing.
+            row = conn.execute(
+                "SELECT committed_cny, reserved_cny FROM public.model_budget WHERE id = 1"
+            ).fetchone()
+            assert float(row[0]) > 0.0
+            assert float(row[1]) == 0.0
+            flag = conn.execute(
+                "SELECT value FROM public.service_flags "
+                "WHERE key = 'model_generation_paused'"
+            ).fetchone()
+            assert flag is not None and flag[0] == "true"
+    finally:
+        _reset_budget()
+        with connect() as conn:
+            conn.execute(
+                "UPDATE public.service_flags SET value = 'false' "
+                "WHERE key = 'model_generation_paused'"
+            )
+
+
 def test_expire_stale_releases_reservation() -> None:
     with connect() as conn:
         skip_unless_test_db(conn)
