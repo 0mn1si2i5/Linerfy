@@ -241,7 +241,7 @@ class PostgresJobStore:
         )
         return ClaimedJob(
             job=EnrichmentJob(
-                id=row[0],
+                id=str(row[0]),
                 entity_id=row[1],
                 stage=row[2],
                 state="running",

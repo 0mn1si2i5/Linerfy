@@ -25,8 +25,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _anon_count(conn, query: str, params: tuple = ()) -> int:
-    conn.execute("SET ROLE anon")
+def _role_count(conn, role: str, query: str, params: tuple = ()) -> int:
+    conn.execute(f"SET ROLE {role}")
     try:
         return conn.execute(query, params).fetchone()[0]
     finally:
@@ -141,11 +141,29 @@ def rls_ids():
             cleanup(conn, artist_id=ids["artist"], source_id=ids["source"])
 
 
-def test_anon_reads_published_same_release_citations(rls_ids) -> None:
+def test_anon_is_fully_revoked(rls_ids) -> None:
+    # The auth boundary (migration 004) removes anonymous catalog reads: the
+    # anon role has no SELECT grant, so even a policy regression cannot leak.
+    with connect() as conn:
+        for query in (
+            "SELECT count(*) FROM public.releases",
+            "SELECT count(*) FROM public.claims",
+            "SELECT count(*) FROM public.claim_sources",
+        ):
+            conn.execute("SET ROLE anon")
+            try:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    conn.execute(query)
+            finally:
+                conn.execute("RESET ROLE")
+
+
+def test_authenticated_reads_published_same_release_citations(rls_ids) -> None:
     with connect() as conn:
         assert (
-            _anon_count(
+            _role_count(
                 conn,
+                "authenticated",
                 "SELECT count(*) FROM public.claim_sources "
                 "WHERE claim_id = %s AND document_id = %s",
                 (rls_ids["claim"], rls_ids["published"]),
@@ -153,8 +171,9 @@ def test_anon_reads_published_same_release_citations(rls_ids) -> None:
             == 1
         )
         assert (
-            _anon_count(
+            _role_count(
                 conn,
+                "authenticated",
                 "SELECT count(*) FROM public.genre_sources "
                 "WHERE genre_id = %s AND document_id = %s",
                 (rls_ids["genre"], rls_ids["published"]),
@@ -163,11 +182,12 @@ def test_anon_reads_published_same_release_citations(rls_ids) -> None:
         )
 
 
-def test_anon_cannot_read_a_draft_citation(rls_ids) -> None:
+def test_authenticated_cannot_read_a_draft_citation(rls_ids) -> None:
     with connect() as conn:
         assert (
-            _anon_count(
+            _role_count(
                 conn,
+                "authenticated",
                 "SELECT count(*) FROM public.claim_sources "
                 "WHERE claim_id = %s AND document_id = %s",
                 (rls_ids["claim"], rls_ids["draft"]),
@@ -175,8 +195,9 @@ def test_anon_cannot_read_a_draft_citation(rls_ids) -> None:
             == 0
         )
         assert (
-            _anon_count(
+            _role_count(
                 conn,
+                "authenticated",
                 "SELECT count(*) FROM public.genre_sources "
                 "WHERE genre_id = %s AND document_id = %s",
                 (rls_ids["genre"], rls_ids["draft"]),
@@ -185,11 +206,12 @@ def test_anon_cannot_read_a_draft_citation(rls_ids) -> None:
         )
 
 
-def test_anon_cannot_read_a_cross_release_citation(rls_ids) -> None:
+def test_authenticated_cannot_read_a_cross_release_citation(rls_ids) -> None:
     with connect() as conn:
         assert (
-            _anon_count(
+            _role_count(
                 conn,
+                "authenticated",
                 "SELECT count(*) FROM public.claim_sources "
                 "WHERE claim_id = %s AND document_id = %s",
                 (rls_ids["claim"], rls_ids["second_doc"]),
@@ -197,8 +219,9 @@ def test_anon_cannot_read_a_cross_release_citation(rls_ids) -> None:
             == 0
         )
         assert (
-            _anon_count(
+            _role_count(
                 conn,
+                "authenticated",
                 "SELECT count(*) FROM public.genre_sources "
                 "WHERE genre_id = %s AND document_id = %s",
                 (rls_ids["genre"], rls_ids["second_doc"]),
@@ -207,8 +230,8 @@ def test_anon_cannot_read_a_cross_release_citation(rls_ids) -> None:
         )
 
 
-def test_anon_cannot_read_a_review_body(rls_ids) -> None:
+def test_authenticated_cannot_read_a_review_body(rls_ids) -> None:
     with connect() as conn:
-        conn.execute("SET ROLE anon")
+        conn.execute("SET ROLE authenticated")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT count(*) FROM public.review_document_bodies")

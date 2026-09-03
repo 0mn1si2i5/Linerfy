@@ -144,12 +144,36 @@ def is_test_db(conn: psycopg.Connection) -> bool:
 
 
 def prepare_test_db(conn: psycopg.Connection) -> None:
-    """Prepare a dedicated test database: apply the catalog migration and mark it.
+    """Prepare a dedicated test database: create the Supabase roles, apply the
+    catalog migration, and mark it.
 
     Run this once, manually, against a throwaway/test database -- never against
     the production catalog (guarded the same way as ``reset``).
     """
     require_test_db(conn)
+    # The migrations assume Supabase's three roles exist (RLS policies and
+    # grants name `anon`/`authenticated`); a plain Postgres test database must
+    # create them before the migrations are applied.
+    for role in ("anon", "authenticated", "service_role"):
+        conn.execute(
+            "DO $$ BEGIN "
+            f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') THEN "
+            f"CREATE ROLE {role}; "
+            "END IF; END $$"
+        )
+    # pg_cron is a Supabase-managed extension absent from plain Postgres; the
+    # worker-cron migration calls `cron.unschedule`/`cron.schedule`. Provide
+    # no-op stubs so the migration applies (the schedule itself is a no-op here
+    # and is only ever exercised on Supabase).
+    conn.execute("CREATE SCHEMA IF NOT EXISTS cron")
+    conn.execute(
+        "CREATE OR REPLACE FUNCTION cron.unschedule(job_name text) "
+        "RETURNS boolean LANGUAGE sql AS $$ SELECT false $$"
+    )
+    conn.execute(
+        "CREATE OR REPLACE FUNCTION cron.schedule(job_name text, schedule text, command text) "
+        "RETURNS bigint LANGUAGE sql AS $$ SELECT 0 $$"
+    )
     apply_migration(conn)
     conn.execute(
         f"CREATE TABLE IF NOT EXISTS public.{_TEST_MARKER_TABLE} "
@@ -162,14 +186,30 @@ def prepare_test_db(conn: psycopg.Connection) -> None:
     )
 
 
-def _is_uuid_column(name: str) -> bool:
-    return name == "id" or name.endswith("_id")
+# The columns that are genuinely uuid-typed, per table. ``source_id`` is a uuid
+# foreign key on documents/policies but a *text* slug on summary_runs, and
+# ``license_id`` is a text slug on policies -- a naive ``endswith("_id")`` would
+# coerce those to uuid and break the seed. This map is the precise source of truth.
+_UUID_COLUMNS: dict[str, set[str]] = {
+    "artists": {"id"},
+    "releases": {"id", "artist_id"},
+    "genres": {"id", "release_id"},
+    "review_sources": {"id"},
+    "source_policies": {"source_id"},
+    "review_documents": {"id", "release_id", "source_id"},
+    "review_document_bodies": {"document_id"},
+    "review_excerpts": {"id", "document_id"},
+    "genre_sources": {"genre_id", "document_id"},
+    "summary_runs": {"id", "release_id"},
+    "claims": {"id", "summary_run_id"},
+    "claim_sources": {"claim_id", "document_id"},
+}
 
 
-def _db_value(name: str, value: object) -> object:
+def _db_value(table: str, name: str, value: object) -> object:
     if value is None:
         return None
-    if _is_uuid_column(name):
+    if name in _UUID_COLUMNS.get(table, set()):
         return uuid.UUID(value)
     return value
 
@@ -229,7 +269,7 @@ def seed(
             f"VALUES ({placeholders}) {on_conflict}"
         )
         for row in table_rows:
-            values = [_db_value(column, row[column]) for column in columns]
+            values = [_db_value(table, column, row[column]) for column in columns]
             cursor = conn.execute(statement, values)
             written += cursor.rowcount
     return written
