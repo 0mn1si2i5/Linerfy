@@ -18,7 +18,8 @@ def test_fixture_adapter_loads_full_entity_linked_context() -> None:
     assert context.release.title == "Norman Fucking Rockwell!"
     assert context.artist.name == "Lana Del Rey"
     assert len(context.review_documents) == 2
-    assert len(context.summary.claims) == 1
+    assert len(context.summaries) == 3
+    assert {summary.kind for summary in context.summaries} == {"source", "consensus"}
     assert {genre.name for genre in context.genres} == {
         "Singer-Songwriter",
         "Psychedelic Pop",
@@ -42,7 +43,7 @@ def test_claim_must_reference_an_ingested_document() -> None:
     context = load_context()
 
     data = context.model_dump()
-    data["summary"]["claims"] = [{"text": "Claim", "source_ids": ["missing"]}]
+    data["summaries"][0]["claims"] = [{"text": "Claim", "source_ids": ["missing"]}]
 
     with pytest.raises(ValidationError, match="unknown review documents"):
         IngestedContext.model_validate(data)

@@ -26,10 +26,22 @@ def test_public_output_has_camel_case_shape() -> None:
         "genres",
         "sources",
         "excerpts",
-        "summary",
+        "sourceSummaries",
+        "consensusBlocks",
     }
     assert public["release"]["artistId"] == public["artist"]["id"]
-    assert public["summary"]["corpusHash"] == "fixture:nfr:v1"
+
+
+def test_public_output_distinguishes_sources_from_consensus() -> None:
+    public = load_public()
+
+    source_ids = [summary["source"]["id"] for summary in public["sourceSummaries"]]
+    assert set(source_ids) == {"pitchfork", "guardian"}
+    assert len(public["consensusBlocks"]) == 1
+    consensus = public["consensusBlocks"][0]
+    assert consensus["licensePool"] == "proprietary"
+    assert set(consensus["sourceIds"]) == {"pitchfork", "guardian"}
+    assert consensus["license"]["id"] == "proprietary"
 
 
 def test_every_citation_resolves_to_a_public_source() -> None:
@@ -42,8 +54,13 @@ def test_every_citation_resolves_to_a_public_source() -> None:
         for genre in public["genres"]
         for genre_source in genre["sourceIds"]
     )
-    assert all(
-        claim_source in source_ids
-        for claim in public["summary"]["claims"]
-        for claim_source in claim["sourceIds"]
-    )
+    summaries_claims = [
+        claim
+        for summary in public["sourceSummaries"]
+        for claim in summary["claims"]
+    ]
+    consensus_claims = [
+        claim for block in public["consensusBlocks"] for claim in block["claims"]
+    ]
+    for claim in summaries_claims + consensus_claims:
+        assert all(claim_source in source_ids for claim_source in claim["sourceIds"])

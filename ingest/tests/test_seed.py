@@ -84,8 +84,21 @@ def test_claim_sources_match_claim_provenance() -> None:
     context = FixtureSourceAdapter(FIXTURE).fetch()
     r = to_rows(context)
 
-    expected_links = sum(len(claim.source_ids) for claim in context.summary.claims)
+    expected_links = sum(
+        len(claim.source_ids) for summary in context.summaries for claim in summary.claims
+    )
     assert len(r["claim_sources"]) == expected_links
+
+
+def test_each_summary_is_scoped_by_kind_and_pool() -> None:
+    r = rows()
+
+    assert len(r["summary_runs"]) == 3
+    kinds = {row["summary_kind"] for row in r["summary_runs"]}
+    assert kinds == {"source", "consensus"}
+    assert all(row["license_pool"] == "proprietary" for row in r["summary_runs"])
+    # Source summaries and the consensus block are distinct rows (no id collision).
+    assert len({row["id"] for row in r["summary_runs"]}) == 3
 
 
 def test_seed_is_deterministic() -> None:

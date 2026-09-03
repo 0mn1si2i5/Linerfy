@@ -181,6 +181,7 @@ def _build_source_summaries(job: EnrichmentJob, lease_id: str, deps: PipelineDep
             chat=deps.chat,
             kind="source",
             license_pool=license_pool(first.license_id),
+            license_url=first.license_url,
             source_id=source_id,
             attribution=_attribution(first),
         )
@@ -210,7 +211,11 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
         if len(distinct_sources) < 2:
             with connect(autocommit=False) as conn:
                 write_consensus_skipped(
-                    conn, slug, license_pool=pool, attribution=attribution
+                    conn,
+                    slug,
+                    license_pool=pool,
+                    license_url=first.license_url,
+                    attribution=attribution,
                 )
         else:
             consensus = summarize(
@@ -219,6 +224,7 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
                 chat=deps.chat,
                 kind="consensus",
                 license_pool=pool,
+                license_url=first.license_url,
                 attribution=attribution,
             )
             with connect(autocommit=False) as conn:

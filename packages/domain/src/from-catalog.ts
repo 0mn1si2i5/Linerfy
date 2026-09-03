@@ -65,6 +65,13 @@ export interface SummaryRunRow {
   corpus_hash: string;
   generated_at: string;
   status: string;
+  summary_kind: string;
+  license_pool: string;
+  license_url: string;
+  source_id: string | null;
+  attribution: string;
+  ai_modified: boolean;
+  skipped_reason: string | null;
 }
 
 export interface ClaimRow {
@@ -165,22 +172,81 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
         .filter((slug): slug is string => Boolean(slug)),
     }));
 
-  const summaryRun = catalog.summary_runs.find(
+  // Every summary run for this release — never `.find()` a single one, which
+  // would silently drop the other license pools. Source summaries and consensus
+  // blocks are read as separate groups.
+  const releaseSummaries = catalog.summary_runs.filter(
     (r) => r.release_id === release.id,
   );
-  const claims = summaryRun
-    ? catalog.claims
-        .filter((c) => c.summary_run_id === summaryRun.id)
-        .sort((a, b) => a.claim_order - b.claim_order)
-        .map((c) => ({
-          id: `claim-${c.claim_order + 1}`,
-          text: c.claim_text,
-          sourceIds: catalog.claim_sources
-            .filter((cs) => cs.claim_id === c.id)
-            .map((cs) => docByUuid.get(cs.document_id)?.slug)
-            .filter((slug): slug is string => Boolean(slug)),
-        }))
-    : [];
+  const publicationBySlug = new Map(
+    catalog.review_sources.map((s) => [s.slug, s.publication]),
+  );
+
+  const claimsFor = (run: SummaryRunRow) =>
+    catalog.claims
+      .filter((c) => c.summary_run_id === run.id)
+      .sort((a, b) => a.claim_order - b.claim_order)
+      .map((c) => ({
+        id: `claim-${c.claim_order + 1}`,
+        text: c.claim_text,
+        sourceIds: catalog.claim_sources
+          .filter((cs) => cs.claim_id === c.id)
+          .map((cs) => docByUuid.get(cs.document_id)?.slug)
+          .filter((slug): slug is string => Boolean(slug)),
+      }));
+
+  const sourceSummaries: Array<{
+    source: { id: string; publication: string };
+    license: { id: string; url: string };
+    attribution: string;
+    aiModified: boolean;
+    claims: ReturnType<typeof claimsFor>;
+  }> = [];
+  const sourceIdsByPool = new Map<string, string[]>();
+  for (const run of releaseSummaries) {
+    if (run.summary_kind !== "source") continue;
+    const sourceId = run.source_id ?? "";
+    sourceSummaries.push({
+      source: {
+        id: sourceId,
+        publication: publicationBySlug.get(sourceId) ?? "",
+      },
+      license: { id: run.license_pool, url: run.license_url },
+      attribution: run.attribution,
+      aiModified: run.ai_modified,
+      claims: claimsFor(run),
+    });
+    const ids = sourceIdsByPool.get(run.license_pool) ?? [];
+    if (sourceId && !ids.includes(sourceId)) {
+      ids.push(sourceId);
+    }
+    sourceIdsByPool.set(run.license_pool, ids);
+  }
+
+  const consensusBlocks = releaseSummaries
+    .filter((run) => run.summary_kind === "consensus")
+    .map((run) => {
+      const block: {
+        licensePool: string;
+        license: { id: string; url: string };
+        sourceIds: string[];
+        attribution: string;
+        aiModified: boolean;
+        claims: ReturnType<typeof claimsFor>;
+        skippedReason?: string;
+      } = {
+        licensePool: run.license_pool,
+        license: { id: run.license_pool, url: run.license_url },
+        sourceIds: sourceIdsByPool.get(run.license_pool) ?? [],
+        attribution: run.attribution,
+        aiModified: run.ai_modified,
+        claims: claimsFor(run),
+      };
+      if (run.skipped_reason) {
+        block.skippedReason = run.skipped_reason;
+      }
+      return block;
+    });
 
   return musicContextSchema.parse({
     artist: { id: artist.slug, name: artist.name },
@@ -204,14 +270,7 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
     genres,
     sources,
     excerpts,
-    summary: {
-      locale: summaryRun?.locale ?? "en",
-      corpusHash: summaryRun?.corpus_hash ?? "",
-      model: summaryRun?.model ?? "",
-      generatedAt: summaryRun?.generated_at
-        ? new Date(summaryRun.generated_at).toISOString()
-        : new Date(0).toISOString(),
-      claims,
-    },
+    sourceSummaries,
+    consensusBlocks,
   });
 }

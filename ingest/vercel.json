@@ -1,8 +1,4 @@
 {
-  "builds": [
-    { "src": "api/enrichment.py", "use": "@vercel/python" }
-  ],
-  "routes": [
-    { "src": "/api/enrichment", "dest": "/api/enrichment.py" }
-  ]
+  "builds": [{ "src": "api/enrichment.py", "use": "@vercel/python" }],
+  "routes": [{ "src": "/api/enrichment", "dest": "/api/enrichment.py" }]
 }

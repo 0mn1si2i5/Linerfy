@@ -25,8 +25,6 @@ export function SourceLink({
 }
 
 export function MusicContextCard({ context }: { context: MusicContext }) {
-  const claims = context.summary.claims;
-
   return (
     <article className="context-card">
       <header className="release-header">
@@ -55,27 +53,63 @@ export function MusicContextCard({ context }: { context: MusicContext }) {
         </div>
       </header>
 
-      {claims.length ? (
-        <section className="consensus-block">
+      {context.consensusBlocks.map((block) => (
+        <section className="consensus-block" key={block.licensePool}>
           <p className="section-label">中文共识</p>
-          <ul className="claim-list">
-            {claims.map((claim) => {
-              const claimSources = context.sources.filter((source) =>
-                claim.sourceIds.includes(source.id),
-              );
-              return (
-                <li className="claim-item" key={claim.id}>
-                  <p className="claim-text">{claim.text}</p>
-                  <p className="claim-sources">
-                    基于{" "}
-                    {claimSources
-                      .map((source) => source.publication)
-                      .join("、")}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
+          {block.skippedReason ? (
+            <p className="claim-text muted">
+              该许可证池的来源不足两个，未生成综合观点。
+            </p>
+          ) : block.claims.length ? (
+            <ul className="claim-list">
+              {block.claims.map((claim) => {
+                const claimSources = context.sources.filter((source) =>
+                  claim.sourceIds.includes(source.id),
+                );
+                return (
+                  <li className="claim-item" key={claim.id}>
+                    <p className="claim-text">{claim.text}</p>
+                    <p className="claim-sources">
+                      基于{" "}
+                      {claimSources
+                        .map((source) => source.publication)
+                        .join("、")}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          <p className="attribution">
+            {block.attribution} ·{" "}
+            <SourceLink href={block.license.url}>{block.license.id}</SourceLink>
+          </p>
+        </section>
+      ))}
+
+      {context.sourceSummaries.length ? (
+        <section className="source-summaries">
+          <p className="section-label">单来源归纳</p>
+          <div className="source-summary-grid">
+            {context.sourceSummaries.map((summary) => (
+              <article className="source-summary" key={summary.source.id}>
+                <strong>{summary.source.publication}</strong>
+                <ul className="claim-list">
+                  {summary.claims.map((claim) => (
+                    <li className="claim-item" key={claim.id}>
+                      <p className="claim-text">{claim.text}</p>
+                    </li>
+                  ))}
+                </ul>
+                <p className="attribution">
+                  {summary.attribution} ·{" "}
+                  <SourceLink href={summary.license.url}>
+                    {summary.license.id}
+                  </SourceLink>
+                </p>
+              </article>
+            ))}
+          </div>
         </section>
       ) : null}
 

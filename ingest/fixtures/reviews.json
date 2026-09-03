@@ -80,17 +80,62 @@
       "source_ids": ["guardian-nfr"]
     }
   ],
-  "summary": {
-    "locale": "zh-CN",
-    "model": "fixture-editorial-v1",
-    "prompt_version": "fixture-v1",
-    "generated_at": "2026-09-02T00:00:00Z",
-    "corpus_hash": "fixture:nfr:v1",
-    "claims": [
-      {
-        "text": "评论者普遍认为，这张专辑把精细的写作、松弛的制作与美国流行文化的衰败感结合成了 Lana Del Rey 最完整的表达之一。",
-        "source_ids": ["pitchfork-nfr", "guardian-nfr"]
-      }
-    ]
-  }
+  "summaries": [
+    {
+      "locale": "zh-CN",
+      "model": "fixture-editorial-v1",
+      "prompt_version": "fixture-v1",
+      "generated_at": "2026-09-02T00:00:00Z",
+      "corpus_hash": "fixture:nfr:pitchfork",
+      "kind": "source",
+      "license_pool": "proprietary",
+      "license_url": "https://pitchfork.com/contact",
+      "source_id": "pitchfork",
+      "attribution": "Pitchfork — proprietary",
+      "ai_modified": true,
+      "claims": [
+        {
+          "text": "Pitchfork 把这张专辑视为 Lana Del Rey 最完整的表达，称赞其精细的写作与松弛的制作。",
+          "source_ids": ["pitchfork-nfr"]
+        }
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "model": "fixture-editorial-v1",
+      "prompt_version": "fixture-v1",
+      "generated_at": "2026-09-02T00:00:00Z",
+      "corpus_hash": "fixture:nfr:guardian",
+      "kind": "source",
+      "license_pool": "proprietary",
+      "license_url": "https://www.theguardian.com/help/terms-of-service",
+      "source_id": "guardian",
+      "attribution": "The Guardian — proprietary",
+      "ai_modified": true,
+      "claims": [
+        {
+          "text": "The Guardian 认为经典的创作功底与不稳定的文化背景相互成就，使这张专辑更显分量。",
+          "source_ids": ["guardian-nfr"]
+        }
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "model": "fixture-editorial-v1",
+      "prompt_version": "fixture-v1",
+      "generated_at": "2026-09-02T00:00:00Z",
+      "corpus_hash": "fixture:nfr:v1",
+      "kind": "consensus",
+      "license_pool": "proprietary",
+      "license_url": "https://pitchfork.com/contact",
+      "attribution": "Pitchfork、The Guardian — proprietary",
+      "ai_modified": true,
+      "claims": [
+        {
+          "text": "评论者普遍认为，这张专辑把精细的写作、松弛的制作与美国流行文化的衰败感结合成了 Lana Del Rey 最完整的表达之一。",
+          "source_ids": ["pitchfork-nfr", "guardian-nfr"]
+        }
+      ]
+    }
+  ]
 }

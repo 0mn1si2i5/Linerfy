@@ -88,9 +88,48 @@ const catalog: CatalogRows = {
       release_id: "r1",
       model: "fixture-editorial-v1",
       locale: "zh-CN",
+      corpus_hash: "fixture:nfr:pitchfork",
+      generated_at: "2026-09-02T00:00:00Z",
+      status: "published",
+      summary_kind: "source",
+      license_pool: "proprietary",
+      license_url: "https://pitchfork.com/contact",
+      source_id: "pitchfork",
+      attribution: "Pitchfork — proprietary",
+      ai_modified: true,
+      skipped_reason: null,
+    },
+    {
+      id: "sr2",
+      release_id: "r1",
+      model: "fixture-editorial-v1",
+      locale: "zh-CN",
+      corpus_hash: "fixture:nfr:guardian",
+      generated_at: "2026-09-02T00:00:00Z",
+      status: "published",
+      summary_kind: "source",
+      license_pool: "proprietary",
+      license_url: "https://www.theguardian.com/help/terms-of-service",
+      source_id: "guardian",
+      attribution: "The Guardian — proprietary",
+      ai_modified: true,
+      skipped_reason: null,
+    },
+    {
+      id: "sr3",
+      release_id: "r1",
+      model: "fixture-editorial-v1",
+      locale: "zh-CN",
       corpus_hash: "fixture:nfr:v1",
       generated_at: "2026-09-02T00:00:00Z",
       status: "published",
+      summary_kind: "consensus",
+      license_pool: "proprietary",
+      license_url: "https://pitchfork.com/contact",
+      source_id: null,
+      attribution: "Pitchfork、The Guardian — proprietary",
+      ai_modified: true,
+      skipped_reason: null,
     },
   ],
   claims: [
@@ -99,12 +138,28 @@ const catalog: CatalogRows = {
       summary_run_id: "sr1",
       claim_order: 0,
       claim_text:
+        "Pitchfork 把这张专辑视为 Lana Del Rey 最完整的表达，称赞其精细的写作与松弛的制作。",
+    },
+    {
+      id: "c2",
+      summary_run_id: "sr2",
+      claim_order: 0,
+      claim_text:
+        "The Guardian 认为经典的创作功底与不稳定的文化背景相互成就，使这张专辑更显分量。",
+    },
+    {
+      id: "c3",
+      summary_run_id: "sr3",
+      claim_order: 0,
+      claim_text:
         "评论者普遍认为，这张专辑把精细的写作、松弛的制作与美国流行文化的衰败感结合成了 Lana Del Rey 最完整的表达之一。",
     },
   ],
   claim_sources: [
     { claim_id: "c1", document_id: "d1" },
-    { claim_id: "c1", document_id: "d2" },
+    { claim_id: "c2", document_id: "d2" },
+    { claim_id: "c3", document_id: "d1" },
+    { claim_id: "c3", document_id: "d2" },
   ],
   recordings: [],
 };
@@ -158,24 +213,31 @@ const secondAlbum: CatalogRows = {
   ],
   summary_runs: [
     {
-      id: "sr2",
+      id: "srb",
       release_id: "r2",
       model: "m",
       locale: "en",
       corpus_hash: "b:v1",
       generated_at: "2026-01-01T00:00:00Z",
       status: "published",
+      summary_kind: "source",
+      license_pool: "cc-by-sa-4.0",
+      license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+      source_id: "source-b",
+      attribution: "Source B — CC BY-SA 4.0",
+      ai_modified: true,
+      skipped_reason: null,
     },
   ],
   claims: [
     {
-      id: "c2",
-      summary_run_id: "sr2",
+      id: "cb",
+      summary_run_id: "srb",
       claim_order: 0,
       claim_text: "A second album's claim.",
     },
   ],
-  claim_sources: [{ claim_id: "c2", document_id: "d3" }],
+  claim_sources: [{ claim_id: "cb", document_id: "d3" }],
   recordings: [{ id: "rec2", release_id: "r2", title: "Track B" }],
 };
 
@@ -208,8 +270,19 @@ describe("assembleMusicContext", () => {
       "Singer-Songwriter",
       "Psychedelic Pop",
     ]);
-    expect(context.summary.corpusHash).toBe("fixture:nfr:v1");
-    expect(context.summary.claims[0]?.sourceIds).toContain("pitchfork-nfr");
+    expect(context.sourceSummaries.map((s) => s.source.id)).toEqual([
+      "pitchfork",
+      "guardian",
+    ]);
+    expect(context.consensusBlocks).toHaveLength(1);
+    expect(context.consensusBlocks[0]?.licensePool).toBe("proprietary");
+    expect(context.consensusBlocks[0]?.sourceIds).toEqual([
+      "pitchfork",
+      "guardian",
+    ]);
+    expect(context.consensusBlocks[0]?.claims[0]?.sourceIds).toContain(
+      "pitchfork-nfr",
+    );
   });
 
   it("excludes non-published documents", () => {
@@ -246,25 +319,112 @@ describe("assembleMusicContext", () => {
       "A second album's excerpt.",
     );
     expect(context.genres.map((g) => g.name)).not.toContain("Electronic");
-    expect(context.summary.claims.map((c) => c.text)).not.toContain(
+    const allClaims = [
+      ...context.sourceSummaries.flatMap((s) => s.claims),
+      ...context.consensusBlocks.flatMap((b) => b.claims),
+    ];
+    expect(allClaims.map((c) => c.text)).not.toContain(
       "A second album's claim.",
     );
     expect(context.recordings.map((r) => r.id)).not.toContain("rec2");
   });
 
-  it("canonicalizes an offset timestamptz to UTC in the summary", () => {
-    const withOffset: CatalogRows = {
+  it("keeps every license pool (never drops a second pool via find)", () => {
+    // A second source in a different license pool must survive alongside the
+    // first; the old `.find()` would have silently dropped one pool.
+    const twoPools: CatalogRows = {
       ...catalog,
-      summary_runs: [
+      review_sources: [
+        ...catalog.review_sources,
         {
-          ...catalog.summary_runs[0]!,
-          generated_at: "2026-09-02T00:00:00+00:00",
+          id: "s4",
+          slug: "wikipedia",
+          publication: "Wikipedia",
+          homepage_url: "https://en.wikipedia.org",
         },
+      ],
+      review_documents: [
+        ...catalog.review_documents,
+        {
+          id: "d5",
+          slug: "wikipedia-nfr",
+          release_id: "r1",
+          source_id: "s4",
+          source_url: "https://en.wikipedia.org/wiki/Norman_Fucking_Rockwell!",
+          title: "Norman Fucking Rockwell!",
+          author: null,
+          published_at: null,
+          score: null,
+          score_scale: null,
+          status: "published",
+        },
+      ],
+      summary_runs: [
+        ...catalog.summary_runs,
+        {
+          id: "sr4",
+          release_id: "r1",
+          model: "m",
+          locale: "zh-CN",
+          corpus_hash: "wiki",
+          generated_at: "2026-09-02T00:00:00Z",
+          status: "published",
+          summary_kind: "source",
+          license_pool: "cc-by-sa-4.0",
+          license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+          source_id: "wikipedia",
+          attribution: "Wikipedia — CC BY-SA 4.0",
+          ai_modified: true,
+          skipped_reason: null,
+        },
+        {
+          id: "sr5",
+          release_id: "r1",
+          model: "m",
+          locale: "zh-CN",
+          corpus_hash: "wiki-consensus",
+          generated_at: "2026-09-02T00:00:00Z",
+          status: "published",
+          summary_kind: "consensus",
+          license_pool: "cc-by-sa-4.0",
+          license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+          source_id: null,
+          attribution: "Wikipedia — CC BY-SA 4.0",
+          ai_modified: true,
+          skipped_reason: "insufficient-sources",
+        },
+      ],
+      claims: [
+        ...catalog.claims,
+        {
+          id: "c4",
+          summary_run_id: "sr4",
+          claim_order: 0,
+          claim_text: "Wikipedia 概括了专辑的背景。",
+        },
+      ],
+      claim_sources: [
+        ...catalog.claim_sources,
+        { claim_id: "c4", document_id: "d5" },
       ],
     };
 
-    const context = assembleMusicContext(withOffset);
+    const context = assembleMusicContext(twoPools);
 
-    expect(context.summary.generatedAt).toBe("2026-09-02T00:00:00.000Z");
+    expect(context.sourceSummaries.map((s) => s.source.id)).toEqual([
+      "pitchfork",
+      "guardian",
+      "wikipedia",
+    ]);
+    expect(context.consensusBlocks.map((b) => b.licensePool)).toEqual([
+      "proprietary",
+      "cc-by-sa-4.0",
+    ]);
+    const skipped = context.consensusBlocks.find(
+      (b) => b.licensePool === "cc-by-sa-4.0",
+    );
+    expect(skipped?.skippedReason).toBe("insufficient-sources");
+    expect(skipped?.claims).toHaveLength(0);
+    expect(skipped?.sourceIds).toEqual(["wikipedia"]);
   });
 });

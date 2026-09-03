@@ -121,6 +121,7 @@ class Summary(BaseModel):
     claims: list[CitedClaim] = Field(min_length=1)
     kind: Literal["source", "consensus"] = "source"
     license_pool: str = ""
+    license_url: str = ""
     source_id: str | None = None
     attribution: str = ""
     ai_modified: bool = True
@@ -137,7 +138,7 @@ class IngestedContext(BaseModel):
     sources: list[ReviewSource]
     review_documents: list[ReviewDocument]
     genres: list[Genre] = Field(default_factory=list)
-    summary: Summary | None = None
+    summaries: list[Summary] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def check_consistency(self) -> "IngestedContext":
@@ -177,12 +178,11 @@ class IngestedContext(BaseModel):
             raise ValueError(f"references unknown sources: {sorted(unknown)}")
 
     def _check_claim_provenance(self) -> None:
-        if self.summary is None:
-            return
         document_ids = {document.id for document in self.review_documents}
         missing = {
             source_id
-            for claim in self.summary.claims
+            for summary in self.summaries
+            for claim in summary.claims
             for source_id in claim.source_ids
             if source_id not in document_ids
         }

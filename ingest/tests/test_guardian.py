@@ -45,7 +45,7 @@ def test_build_context_is_summary_less_and_keeps_content_private() -> None:
     review = parse_content(_CONTENT)
     context = build_context(review)
 
-    assert context.summary is None
+    assert context.summaries == []
     assert context.release.id == "norman-fucking-rockwell"
 
     document = context.review_documents[0]

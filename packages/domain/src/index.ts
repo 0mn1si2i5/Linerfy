@@ -53,12 +53,39 @@ export const citedClaimSchema = z.object({
   sourceIds: z.array(z.string().min(1)).min(1),
 });
 
-export const citedSummarySchema = z.object({
-  locale: z.string().min(2),
-  corpusHash: z.string().min(1),
-  model: z.string().min(1),
-  generatedAt: z.iso.datetime(),
+// A license id + canonical url. The id is the compatibility pool key (e.g.
+// "CC BY-SA 4.0"); the url is the human-readable license or rights page.
+export const licenseSchema = z.object({
+  id: z.string().min(1),
+  url: z.string().min(1),
+});
+
+// One publication's AI-generated summary. Every claim cites stored review
+// documents (the `sources` array), and the summary is tied to the source's
+// license so incompatible licenses are never mixed into one run.
+export const sourceSummarySchema = z.object({
+  source: z.object({
+    id: z.string().min(1),
+    publication: z.string().min(1),
+  }),
+  license: licenseSchema,
+  attribution: z.string(),
+  aiModified: z.boolean(),
   claims: z.array(citedClaimSchema).min(1),
+});
+
+// A cross-source consensus block for one license pool. `sourceIds` are the
+// publication ids pooled together; a block that was legitimately not generated
+// (fewer than two distinct sources) carries an empty `claims` array and a
+// `skippedReason` instead.
+export const consensusBlockSchema = z.object({
+  licensePool: z.string().min(1),
+  license: licenseSchema,
+  sourceIds: z.array(z.string().min(1)),
+  attribution: z.string(),
+  aiModified: z.boolean(),
+  claims: z.array(citedClaimSchema),
+  skippedReason: z.string().min(1).optional(),
 });
 
 export const musicContextSchema = z
@@ -69,12 +96,18 @@ export const musicContextSchema = z
     genres: z.array(genreSchema),
     sources: z.array(reviewSourceSchema).min(1),
     excerpts: z.array(reviewExcerptSchema),
-    summary: citedSummarySchema,
+    sourceSummaries: z.array(sourceSummarySchema),
+    consensusBlocks: z.array(consensusBlockSchema),
   })
   .superRefine((context, refinement) => {
     const sourceIds = new Set(context.sources.map((source) => source.id));
     const citedIds = [
-      ...context.summary.claims.flatMap((claim) => claim.sourceIds),
+      ...context.sourceSummaries.flatMap((summary) =>
+        summary.claims.flatMap((claim) => claim.sourceIds),
+      ),
+      ...context.consensusBlocks.flatMap((block) =>
+        block.claims.flatMap((claim) => claim.sourceIds),
+      ),
       ...context.genres.flatMap((genre) => genre.sourceIds),
       ...context.excerpts.map((excerpt) => excerpt.sourceId),
     ];
@@ -112,5 +145,7 @@ export type ReviewSource = z.infer<typeof reviewSourceSchema>;
 export type ReviewExcerpt = z.infer<typeof reviewExcerptSchema>;
 export type Genre = z.infer<typeof genreSchema>;
 export type CitedClaim = z.infer<typeof citedClaimSchema>;
-export type CitedSummary = z.infer<typeof citedSummarySchema>;
+export type License = z.infer<typeof licenseSchema>;
+export type SourceSummary = z.infer<typeof sourceSummarySchema>;
+export type ConsensusBlock = z.infer<typeof consensusBlockSchema>;
 export type MusicContext = z.infer<typeof musicContextSchema>;

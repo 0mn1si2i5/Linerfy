@@ -10,6 +10,7 @@ alter table public.summary_runs
   add column if not exists summary_kind text not null default 'source'
     check (summary_kind in ('source', 'consensus')),
   add column if not exists license_pool text not null default '',
+  add column if not exists license_url text not null default '',
   add column if not exists source_id text,
   add column if not exists attribution text not null default '',
   add column if not exists ai_modified boolean not null default true,

@@ -29,6 +29,17 @@ def _publication_name(context: IngestedContext, source_id: str) -> str:
     raise ValueError(f"unknown source: {source_id}")
 
 
+def _summary_claims(summary) -> list[dict]:
+    return [
+        {"id": f"claim-{order + 1}", "text": claim.text, "sourceIds": claim.source_ids}
+        for order, claim in enumerate(summary.claims)
+    ]
+
+
+def _license(summary) -> dict:
+    return {"id": summary.license_pool, "url": summary.license_url}
+
+
 def to_public(context: IngestedContext) -> dict:
     sources = [
         _omit_none(
@@ -61,14 +72,46 @@ def to_public(context: IngestedContext) -> dict:
         for document in context.review_documents
     ]
 
-    claims = [
-        {
-            "id": f"claim-{order + 1}",
-            "text": claim.text,
-            "sourceIds": claim.source_ids,
+    publication = {source.id: source.publication for source in context.sources}
+
+    # A consensus block scopes itself to the sources that share its license pool;
+    # those sources are the per-source summaries written with the same pool. Build
+    # the per-source summaries first so the consensus blocks can cite them.
+    source_summaries: list[dict] = []
+    source_ids_by_pool: dict[str, list[str]] = {}
+    for summary in context.summaries:
+        if summary.kind == "source" and summary.source_id is not None:
+            source_summaries.append(
+                {
+                    "source": {
+                        "id": summary.source_id,
+                        "publication": publication.get(summary.source_id, ""),
+                    },
+                    "license": _license(summary),
+                    "attribution": summary.attribution,
+                    "aiModified": summary.ai_modified,
+                    "claims": _summary_claims(summary),
+                }
+            )
+            source_ids_by_pool.setdefault(summary.license_pool, []).append(
+                summary.source_id
+            )
+
+    consensus_blocks: list[dict] = []
+    for summary in context.summaries:
+        if summary.kind != "consensus":
+            continue
+        block = {
+            "licensePool": summary.license_pool,
+            "license": _license(summary),
+            "sourceIds": list(dict.fromkeys(source_ids_by_pool.get(summary.license_pool, []))),
+            "attribution": summary.attribution,
+            "aiModified": summary.ai_modified,
+            "claims": _summary_claims(summary),
         }
-        for order, claim in enumerate(context.summary.claims)
-    ]
+        if summary.skipped_reason:
+            block["skippedReason"] = summary.skipped_reason
+        consensus_blocks.append(block)
 
     return {
         "artist": {"id": context.artist.id, "name": context.artist.name},
@@ -88,11 +131,6 @@ def to_public(context: IngestedContext) -> dict:
         ],
         "sources": sources,
         "excerpts": excerpts,
-        "summary": {
-            "locale": context.summary.locale,
-            "corpusHash": context.summary.corpus_hash,
-            "model": context.summary.model,
-            "generatedAt": _iso_z(context.summary.generated_at),
-            "claims": claims,
-        },
+        "sourceSummaries": source_summaries,
+        "consensusBlocks": consensus_blocks,
     }

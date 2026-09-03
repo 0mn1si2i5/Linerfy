@@ -11,7 +11,7 @@ import hashlib
 import uuid
 from datetime import date
 
-from .models import IngestedContext, ReviewDocument
+from .models import IngestedContext, ReviewDocument, Summary
 
 _NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
@@ -19,6 +19,19 @@ _NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 def stable_uuid(kind: str, slug: str) -> str:
     """Deterministic uuid so a seed is idempotent and FKs resolve across tables."""
     return str(uuid.uuid5(_NAMESPACE, f"linerfy:{kind}:{slug}"))
+
+
+def _summary_run_key(release_slug: str, summary: Summary) -> str:
+    """The same stable summary-run scope the pipeline writer uses.
+
+    Source summaries are scoped per source; consensus blocks per license pool.
+    This must match ``summarize._summary_run_key`` so a seeded release and a
+    pipeline-written release resolve to the same run ids.
+    """
+    if summary.kind == "consensus":
+        return f"{release_slug}::consensus::{summary.license_pool}"
+    scope = summary.source_id or summary.license_pool or "unscoped"
+    return f"{release_slug}::source::{scope}"
 
 
 def _fingerprint(document: ReviewDocument) -> str:
@@ -147,33 +160,30 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
     summary_runs = []
     claims = []
     claim_sources = []
-    if context.summary is not None:
-        scope = (
-            context.summary.source_id
-            or context.summary.license_pool
-            or context.summary.kind
-        )
-        summary_run_id = stable_uuid("summary", f"{context.release.id}::{scope}")
-        summary_runs = [
+    for summary in context.summaries:
+        run_key = _summary_run_key(context.release.id, summary)
+        summary_run_id = stable_uuid("summary", run_key)
+        summary_runs.append(
             {
                 "id": summary_run_id,
                 "release_id": release_id,
-                "model": context.summary.model,
-                "prompt_version": context.summary.prompt_version,
-                "locale": context.summary.locale,
-                "corpus_hash": context.summary.corpus_hash,
-                "generated_at": context.summary.generated_at.isoformat(),
+                "model": summary.model,
+                "prompt_version": summary.prompt_version,
+                "locale": summary.locale,
+                "corpus_hash": summary.corpus_hash,
+                "generated_at": summary.generated_at.isoformat(),
                 "status": "published",
-                "summary_kind": context.summary.kind,
-                "license_pool": context.summary.license_pool,
-                "source_id": context.summary.source_id,
-                "attribution": context.summary.attribution,
-                "ai_modified": context.summary.ai_modified,
-                "skipped_reason": context.summary.skipped_reason,
+                "summary_kind": summary.kind,
+                "license_pool": summary.license_pool,
+                "license_url": summary.license_url,
+                "source_id": summary.source_id,
+                "attribution": summary.attribution,
+                "ai_modified": summary.ai_modified,
+                "skipped_reason": summary.skipped_reason,
             }
-        ]
-        for order, claim in enumerate(context.summary.claims):
-            claim_id = stable_uuid("claim", f"{context.release.id}:{order}")
+        )
+        for order, claim in enumerate(summary.claims):
+            claim_id = stable_uuid("claim", f"{run_key}:{order}")
             claims.append(
                 {
                     "id": claim_id,

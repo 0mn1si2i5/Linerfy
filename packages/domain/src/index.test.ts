@@ -8,12 +8,14 @@ describe("musicContextSchema", () => {
     const parsed = musicContextSchema.parse(featuredContext);
 
     expect(parsed.release.title).toBe("Norman Fucking Rockwell!");
-    expect(parsed.summary.claims[0]?.sourceIds).toContain("pitchfork-nfr");
+    expect(parsed.sourceSummaries[0]?.claims[0]?.sourceIds).toContain(
+      "pitchfork-nfr",
+    );
   });
 
   it("rejects claims that reference an absent source", () => {
     const context = structuredClone(featuredContext);
-    context.summary.claims[0]!.sourceIds = ["missing-source"];
+    context.sourceSummaries[0]!.claims[0]!.sourceIds = ["missing-source"];
 
     expect(() => musicContextSchema.parse(context)).toThrow(
       "Every cited claim must reference a source in this context",

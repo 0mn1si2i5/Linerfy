@@ -142,6 +142,7 @@ def summarize(
     chat,
     kind: str = "source",
     license_pool: str = "",
+    license_url: str = "",
     source_id: str | None = None,
     attribution: str = "",
     ai_modified: bool = True,
@@ -174,6 +175,7 @@ def summarize(
         claims=claims,
         kind=kind,
         license_pool=license_pool,
+        license_url=license_url,
         source_id=source_id,
         attribution=attribution,
         ai_modified=ai_modified,
@@ -267,16 +269,16 @@ def write_summary(
         cursor = conn.execute(
             "INSERT INTO public.summary_runs "
             "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
-            " status, summary_kind, license_pool, source_id, attribution, ai_modified, "
-            " skipped_reason) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            " status, summary_kind, license_pool, license_url, source_id, attribution, "
+            " ai_modified, skipped_reason) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (id) DO UPDATE SET model=EXCLUDED.model, "
             "prompt_version=EXCLUDED.prompt_version, locale=EXCLUDED.locale, "
             "corpus_hash=EXCLUDED.corpus_hash, generated_at=EXCLUDED.generated_at, "
             "status=EXCLUDED.status, summary_kind=EXCLUDED.summary_kind, "
-            "license_pool=EXCLUDED.license_pool, source_id=EXCLUDED.source_id, "
-            "attribution=EXCLUDED.attribution, ai_modified=EXCLUDED.ai_modified, "
-            "skipped_reason=EXCLUDED.skipped_reason",
+            "license_pool=EXCLUDED.license_pool, license_url=EXCLUDED.license_url, "
+            "source_id=EXCLUDED.source_id, attribution=EXCLUDED.attribution, "
+            "ai_modified=EXCLUDED.ai_modified, skipped_reason=EXCLUDED.skipped_reason",
             (
                 summary_run_id,
                 release_id,
@@ -288,6 +290,7 @@ def write_summary(
                 status,
                 summary.kind,
                 summary.license_pool,
+                summary.license_url,
                 summary.source_id,
                 summary.attribution,
                 summary.ai_modified,
@@ -330,6 +333,7 @@ def write_consensus_skipped(
     release_slug: str,
     *,
     license_pool: str,
+    license_url: str = "",
     attribution: str,
     reason: str = "insufficient-sources",
     status: str = "candidate",
@@ -344,13 +348,14 @@ def write_consensus_skipped(
         cursor = conn.execute(
             "INSERT INTO public.summary_runs "
             "(id, release_id, model, prompt_version, locale, corpus_hash, generated_at, "
-            " status, summary_kind, license_pool, source_id, attribution, ai_modified, "
-            " skipped_reason) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            " status, summary_kind, license_pool, license_url, source_id, attribution, "
+            " ai_modified, skipped_reason) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, "
             "summary_kind=EXCLUDED.summary_kind, license_pool=EXCLUDED.license_pool, "
-            "source_id=EXCLUDED.source_id, attribution=EXCLUDED.attribution, "
-            "ai_modified=EXCLUDED.ai_modified, skipped_reason=EXCLUDED.skipped_reason",
+            "license_url=EXCLUDED.license_url, source_id=EXCLUDED.source_id, "
+            "attribution=EXCLUDED.attribution, ai_modified=EXCLUDED.ai_modified, "
+            "skipped_reason=EXCLUDED.skipped_reason",
             (
                 summary_run_id,
                 release_id,
@@ -362,6 +367,7 @@ def write_consensus_skipped(
                 status,
                 "consensus",
                 license_pool,
+                license_url,
                 None,
                 attribution,
                 True,

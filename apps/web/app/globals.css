@@ -264,6 +264,37 @@ footer {
   font-size: 0.85rem;
 }
 
+.attribution {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.source-summaries {
+  margin: 48px 0;
+}
+
+.source-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.source-summary {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.source-summary strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.1rem;
+}
+
 .section-heading,
 .source-meta {
   display: flex;
