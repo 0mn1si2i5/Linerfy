@@ -4,6 +4,7 @@ import {
   nowPlayingRequestSchema,
   releaseSlug,
   requestFingerprint,
+  toIngestPayload,
   type NowPlayingRequest,
 } from "./request";
 
@@ -62,14 +63,18 @@ describe("requestFingerprint", () => {
   });
 
   it("prefers the provider URL over artist/album", () => {
-    const withUrl = requestFingerprint(np({ providerUrl: "spotify:track:123" }));
+    const withUrl = requestFingerprint(
+      np({ providerUrl: "spotify:track:123" }),
+    );
     const withoutUrl = requestFingerprint(np());
     expect(withUrl).not.toBe(withoutUrl);
   });
 
   it("separates different albums", () => {
     const a = requestFingerprint(np({ album: "Norman Fucking Rockwell!" }));
-    const b = requestFingerprint(np({ album: "Chemtrails Over the Country Club" }));
+    const b = requestFingerprint(
+      np({ album: "Chemtrails Over the Country Club" }),
+    );
     expect(a).not.toBe(b);
   });
 });
@@ -83,5 +88,25 @@ describe("releaseSlug", () => {
 
   it("falls back to unknown for empty parts", () => {
     expect(releaseSlug("!!!", "   ")).toBe("unknown-unknown");
+  });
+});
+
+describe("toIngestPayload", () => {
+  it("maps providerUrl to the snake_case ingest contract", () => {
+    const payload = toIngestPayload(np({ providerUrl: "spotify:track:123" }));
+    expect(payload.provider_url).toBe("spotify:track:123");
+    expect(payload).not.toHaveProperty("providerUrl");
+  });
+
+  it("omits provider_url when absent", () => {
+    const payload = toIngestPayload(np());
+    expect(payload).not.toHaveProperty("provider_url");
+    expect(payload).toMatchObject({
+      provider: "spotify",
+      title: "Mariners Apartment Complex",
+      artist: "Lana Del Rey",
+      album: "Norman Fucking Rockwell!",
+      state: "playing",
+    });
   });
 });

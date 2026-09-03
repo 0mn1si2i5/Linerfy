@@ -12,7 +12,10 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   const secret = process.env.LINERFY_WORKER_SECRET;
   if (!secret) {
-    return NextResponse.json({ error: "worker not configured" }, { status: 503 });
+    return NextResponse.json(
+      { error: "worker not configured" },
+      { status: 503 },
+    );
   }
   const token = bearerToken(request.headers.get("authorization"));
   if (!token || token !== secret) {

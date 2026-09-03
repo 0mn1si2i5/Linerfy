@@ -6,6 +6,7 @@ import {
   nowPlayingRequestSchema,
   releaseSlug,
   requestFingerprint,
+  toIngestPayload,
 } from "../../../lib/request";
 import { serviceClient } from "../../../lib/supabase";
 
@@ -16,7 +17,10 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   const token = bearerToken(request.headers.get("authorization"));
   if (!token) {
-    return NextResponse.json({ error: "missing bearer token" }, { status: 401 });
+    return NextResponse.json(
+      { error: "missing bearer token" },
+      { status: 401 },
+    );
   }
   const auth = await resolveAuthState(token);
   if (auth.status === "unauthenticated") {
@@ -54,7 +58,9 @@ export async function POST(request: NextRequest) {
 
   if (job) {
     if (job.state === "ready") {
-      const result = await getContextBySlug(releaseSlug(parsed.data.artist, parsed.data.album));
+      const result = await getContextBySlug(
+        releaseSlug(parsed.data.artist, parsed.data.album),
+      );
       if (result.status === "ok") {
         return NextResponse.json({ status: "ready", context: result.context });
       }
@@ -66,7 +72,7 @@ export async function POST(request: NextRequest) {
     {
       entity_id: fingerprint,
       entity_kind: "release",
-      payload: parsed.data,
+      payload: toIngestPayload(parsed.data),
       stage: "resolve_entity",
       state: "queued",
     },

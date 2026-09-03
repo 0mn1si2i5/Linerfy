@@ -47,5 +47,35 @@ def test_lookup_key_returns_resolution_fields() -> None:
     assert request.lookup_key() == {"artist": "a", "album": "b", "title": "t"}
 
 
+def test_accepts_web_ingest_payload_shape() -> None:
+    """The web API persists the snake_case payload produced by toIngestPayload."""
+    request = NowPlayingRequest.model_validate(
+        {
+            "provider": "spotify",
+            "title": "Mariners Apartment Complex",
+            "artist": "Lana Del Rey",
+            "album": "Norman Fucking Rockwell!",
+            "state": "playing",
+            "provider_url": "spotify:track:123",
+        }
+    )
+    assert request.provider_url == "spotify:track:123"
+
+
+def test_rejects_camel_case_provider_url() -> None:
+    """The ingest contract is snake_case; a camelCase `providerUrl` must be
+    mapped at the web boundary before it is persisted."""
+    with pytest.raises(ValidationError):
+        NowPlayingRequest.model_validate(
+            {
+                "provider": "spotify",
+                "title": "t",
+                "artist": "a",
+                "album": "b",
+                "providerUrl": "spotify:track:123",
+            }
+        )
+
+
 def test_normalize_folds_case_and_collapses_space() -> None:
     assert normalize("  Lana   Del Rey ") == "lana del rey"
