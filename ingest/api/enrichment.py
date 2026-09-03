@@ -7,7 +7,12 @@ model work happen outside any database transaction; the durable budget ledger
 serialises reservations so concurrent invocations cannot exceed the cap.
 
 The response is structured statistics only — never a review body, prompt, or
-secret.
+secret. The default error path logs an error category, never a full traceback;
+set ``LINERFY_DEBUG_TRACEBACK=1`` to opt into tracebacks for local debugging.
+
+The Vercel Python runtime auto-detects this file in the ``api`` directory and
+requires the module to expose a top-level ``handler`` that is a
+``BaseHTTPRequestHandler`` subclass (lowercase ``handler``, not ``Handler``).
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from linerfy_ingest.worker import advance_once, check_worker_auth  # noqa: E402
 
 
-class Handler(BaseHTTPRequestHandler):
+class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # health check
         self._json(200, {"ok": True})
 
@@ -44,8 +49,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             processed = advance_once()
             self._json(200, {"processed": processed})
-        except Exception:  # never leak internals to the caller
-            print(traceback.format_exc(), file=sys.stderr)
+        except Exception as exc:  # never leak internals to the caller
+            # Default: log only the error category. Full tracebacks are opt-in
+            # for local debugging, so a production error never spills a review
+            # body, secret, or stack into the logs.
+            if os.environ.get("LINERFY_DEBUG_TRACEBACK") == "1":
+                print(traceback.format_exc(), file=sys.stderr)
+            else:
+                print(f"worker error: {type(exc).__name__}", file=sys.stderr)
             self._json(500, {"error": "worker error"})
 
     def _json(self, status: int, payload: dict) -> None:
