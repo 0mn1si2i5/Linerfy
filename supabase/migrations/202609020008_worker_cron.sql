@@ -33,9 +33,15 @@ $$;
 
 revoke all on function public.reap_enrichment_timeouts() from public, anon, authenticated;
 
--- One-minute cron. The URL and secret are read from Vault at run time:
---   vault.create_secret('linerfy_worker_url', '<https://<project>.vercel.app/api/enrichment/run>')
+-- One-minute cron pointing at the deployable Python worker (the Worker Vercel
+-- Project, root `ingest`), NOT the Next.js reap-only route. The URL and secret
+-- are read from Vault at run time and never written into this file:
+--   vault.create_secret('linerfy_worker_url', 'https://<worker-project>.vercel.app/api/enrichment')
 --   vault.create_secret('linerfy_worker_secret', '<worker secret>')
+
+-- Idempotent: drop any schedule of the same name before creating it.
+select cron.unschedule('linerfy-worker');
+
 select cron.schedule(
   'linerfy-worker',
   '* * * * *',

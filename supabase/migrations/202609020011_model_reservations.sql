@@ -28,5 +28,17 @@ create table if not exists public.model_usage_reservations (
 create index if not exists model_reservations_status_idx
   on public.model_usage_reservations (status, expires_at);
 
+-- A single-row running total that reserve/settle lock FOR UPDATE, so concurrent
+-- invocations serialise and can never jointly exceed the cap.
+create table if not exists public.model_budget (
+  id integer primary key check (id = 1),
+  committed_cny numeric not null default 0,
+  reserved_cny numeric not null default 0
+);
+insert into public.model_budget (id, committed_cny, reserved_cny)
+  values (1, 0, 0)
+  on conflict (id) do nothing;
+
 -- Server-only: anon/authenticated get no grants, and no RLS read policy.
 alter table public.model_usage_reservations enable row level security;
+alter table public.model_budget enable row level security;
