@@ -1,0 +1,80 @@
+import { NextResponse, type NextRequest } from "next/server";
+
+import { bearerToken, resolveAuthState } from "../../../lib/auth";
+import { getContextBySlug } from "../../../lib/catalog";
+import {
+  nowPlayingRequestSchema,
+  releaseSlug,
+  requestFingerprint,
+} from "../../../lib/request";
+import { serviceClient } from "../../../lib/supabase";
+
+export const dynamic = "force-dynamic";
+
+// The authenticated online entry point: report the current track and receive
+// its enrichment state (queued/running/ready/…), or the full context when ready.
+export async function POST(request: NextRequest) {
+  const token = bearerToken(request.headers.get("authorization"));
+  if (!token) {
+    return NextResponse.json({ error: "missing bearer token" }, { status: 401 });
+  }
+  const auth = await resolveAuthState(token);
+  if (auth.status === "unauthenticated") {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  if (auth.status === "not-whitelisted") {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+  const parsed = nowPlayingRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "invalid now-playing request", issues: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+
+  const fingerprint = requestFingerprint(parsed.data);
+  const supabase = serviceClient();
+
+  const { data: job, error: jobError } = await supabase
+    .from("enrichment_jobs")
+    .select("state, stage")
+    .eq("entity_id", fingerprint)
+    .maybeSingle();
+  if (jobError) {
+    return NextResponse.json({ error: "query failed" }, { status: 500 });
+  }
+
+  if (job) {
+    if (job.state === "ready") {
+      const result = await getContextBySlug(releaseSlug(parsed.data.artist, parsed.data.album));
+      if (result.status === "ok") {
+        return NextResponse.json({ status: "ready", context: result.context });
+      }
+    }
+    return NextResponse.json({ status: job.state, stage: job.stage });
+  }
+
+  const { error: insertError } = await supabase.from("enrichment_jobs").upsert(
+    {
+      entity_id: fingerprint,
+      entity_kind: "release",
+      payload: parsed.data,
+      stage: "resolve_entity",
+      state: "queued",
+    },
+    { onConflict: "entity_kind,entity_id", ignoreDuplicates: true },
+  );
+  if (insertError) {
+    return NextResponse.json({ error: "queue failed" }, { status: 500 });
+  }
+
+  return NextResponse.json({ status: "queued", stage: "resolve_entity" });
+}
