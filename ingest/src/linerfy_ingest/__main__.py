@@ -29,6 +29,7 @@ from pathlib import Path
 from .adapter import FixtureSourceAdapter
 from .admin import list_jobs, purge_expired, retry_failed, set_pause
 from .budget import BudgetError, BudgetLedger
+from .critiquebrainz import CritiqueBrainzAdapter
 from .db import (
     apply_migration,
     connect,
@@ -39,14 +40,13 @@ from .db import (
     verify,
 )
 from .jobs import PostgresJobStore, run_once
+from .musicbrainz import MusicBrainzAdapter
+from .pipeline import PipelineDeps, build_handlers
 from .providers import ChatProvider, ModelConfig, resolve_provider
 from .summarize import read_corpus, summarize, write_summary
+from .wikipedia import WikipediaAdapter
 
 _FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "reviews.json"
-
-# The enrichment stage handlers. Populated by R4; until then the tick safely
-# reports "no handler" rather than fabricating progress.
-_STAGE_HANDLERS: dict = {}
 
 _HELP = """usage: python -m linerfy_ingest <mode> [options]
 
@@ -89,10 +89,42 @@ def _run_prepare_test_db() -> None:
     print("prepared test database: applied migration and marked it")
 
 
+def _build_enrichment_handlers(conn):
+    """Construct the real five-stage handlers from live dependencies.
+
+    The model provider is resolved lazily on the first model call, so resolve
+    and fetch stages still run when MODEL_API_KEY is absent.
+    """
+    ledger = BudgetLedger(_budget_path())
+    max_tokens = int(os.environ.get("MODEL_MAX_TOKENS", "2048"))
+    provider_cache: dict[str, ChatProvider] = {}
+
+    def chat(messages):
+        if "provider" not in provider_cache:
+            provider_cache["provider"] = _resolve_model()
+        provider = provider_cache["provider"]
+        ledger.check(provider.model, max_tokens)
+        result = provider.chat(messages)
+        ledger.settle(provider.model, result.usage)
+        return result
+
+    deps = PipelineDeps(
+        store=PostgresJobStore(conn),
+        conn=conn,
+        musicbrainz=MusicBrainzAdapter(),
+        critiquebrainz=CritiqueBrainzAdapter(),
+        wikipedia=WikipediaAdapter(),
+        model=os.environ.get("MODEL_NAME", "deepseek-chat"),
+        chat=chat,
+    )
+    return build_handlers(deps)
+
+
 def _run_enrichment() -> None:
     """Run one worker tick: reap timeouts, claim one job, run its stage."""
     with connect(autocommit=False) as conn:
-        processed = run_once(PostgresJobStore(conn), _STAGE_HANDLERS)
+        handlers = _build_enrichment_handlers(conn)
+        processed = run_once(PostgresJobStore(conn), handlers)
         conn.commit()
     print(f"enrichment tick: processed {processed} job(s)")
 

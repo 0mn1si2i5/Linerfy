@@ -90,6 +90,10 @@ class StageHandler(Protocol):
     def __call__(self, job: EnrichmentJob) -> None: ...
 
 
+class JobUnavailable(Exception):
+    """Raised by a stage to mark a job terminally unavailable (no retry)."""
+
+
 def next_stage(stage: Stage) -> Stage | None:
     """The stage after ``stage``, or None at the end of the pipeline."""
     index = STAGES.index(stage)
@@ -113,6 +117,10 @@ def run_job(
         return
     try:
         handler(job)
+    except JobUnavailable:
+        # Terminal: the entity cannot be resolved; no retry, no pollution.
+        store.advance(job, stage=None, state="unavailable")
+        return
     except Exception as exc:  # the job boundary absorbs stage errors for retry
         store.fail(job, str(exc))
         return

@@ -180,16 +180,22 @@ def read_corpus(conn, release_slug: str) -> list[CorpusDocument]:
     return [CorpusDocument(id=slug, text=content) for slug, content in rows]
 
 
-def write_summary(conn, release_slug: str, summary: Summary) -> int:
+def write_summary(
+    conn, release_slug: str, summary: Summary, *, pool: str | None = None
+) -> int:
     """Replace a release's summary atomically: the run, its claims, and their
     citations are written in one transaction, so a failure on any row leaves the
     previously published summary exactly as it was.
+
+    ``pool`` scopes the run to a license pool: each pool has its own summary
+    run, so incompatible licenses never share a run.
 
     ``conn`` must be in transactional (non-autocommit) mode so the block below
     actually commits/rolls back as a unit.
     """
     release_id = uuid.UUID(stable_uuid("release", release_slug))
-    summary_run_id = uuid.UUID(stable_uuid("summary", release_slug))
+    run_key = f"{release_slug}::{pool}" if pool else release_slug
+    summary_run_id = uuid.UUID(stable_uuid("summary", run_key))
     written = 0
 
     with conn.transaction():
@@ -222,7 +228,7 @@ def write_summary(conn, release_slug: str, summary: Summary) -> int:
         written += cursor.rowcount
 
         for order, claim in enumerate(summary.claims):
-            claim_id = uuid.UUID(stable_uuid("claim", f"{release_slug}:{order}"))
+            claim_id = uuid.UUID(stable_uuid("claim", f"{run_key}:{order}"))
             cursor = conn.execute(
                 "INSERT INTO public.claims (id, summary_run_id, claim_order, claim_text) "
                 "VALUES (%s,%s,%s,%s) "
