@@ -14,11 +14,12 @@ database marked by ``prepare_test_db``.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 from _db_helpers import skip_unless_test_db
 
-from linerfy_ingest.critiquebrainz import CritiqueBrainzAdapter
+from linerfy_ingest.critiquebrainz import CritiqueBrainzAdapter, CritiqueBrainzReview
 from linerfy_ingest.db import connect
 from linerfy_ingest.entities import ReleaseGroup
 from linerfy_ingest.jobs import PostgresJobStore, run_once
@@ -69,7 +70,18 @@ class _FakeMB(MusicBrainzAdapter):
 
 class _FakeCB(CritiqueBrainzAdapter):
     def search_reviews(self, mbid):
-        return []
+        return [
+            CritiqueBrainzReview(
+                id="cb-1",
+                entity_id=mbid,
+                text="A user review that praises the album's writing.",
+                license_id="CC BY-NC-SA 3.0",
+                language="en",
+                rating=4,
+                author="Reviewer",
+                created=None,
+            )
+        ]
 
 
 class _FakeWiki(WikipediaAdapter):
@@ -80,12 +92,18 @@ class _FakeWiki(WikipediaAdapter):
         )
 
 
-def _chat(_messages):
+def _chat(messages):
+    # The stub model must cite the ids of the corpus it was actually given, so
+    # the same callable serves every source/pool. Extract them from the user
+    # prompt's <document id="..."> markers.
+    user = messages[-1]["content"]
+    doc_ids = re.findall(r'<document id="([^"]+)"', user) or [_DOC_ID]
+    src = doc_ids[0]
     content = (
         '{"claims": ['
-        f'{{"text": "评论普遍正面。", "source_ids": ["{_DOC_ID}"]}}, '
-        f'{{"text": "制作获得认可。", "source_ids": ["{_DOC_ID}"]}}, '
-        f'{{"text": "歌词被认为成熟。", "source_ids": ["{_DOC_ID}"]}}'
+        f'{{"text": "评论普遍正面。", "source_ids": ["{src}"]}}, '
+        f'{{"text": "制作获得认可。", "source_ids": ["{src}"]}}, '
+        f'{{"text": "歌词被认为成熟。", "source_ids": ["{src}"]}}'
         "]}"
     )
     return ChatResult(content=content, finish_reason="stop")
@@ -109,7 +127,10 @@ def _cleanup(fingerprints: list[str]) -> None:
                 "DELETE FROM public.enrichment_jobs WHERE entity_id = %s", (fp,)
             )
         conn.execute("DELETE FROM public.artists WHERE slug = %s", ("test-artist",))
-        conn.execute("DELETE FROM public.review_sources WHERE slug = %s", ("wikipedia",))
+        conn.execute(
+            "DELETE FROM public.review_sources WHERE slug IN (%s,%s)",
+            ("wikipedia", "critiquebrainz"),
+        )
 
 
 def _run_to_completion(store, handlers) -> None:
@@ -157,9 +178,35 @@ def test_pipeline_runs_resolve_to_publish_against_test_db() -> None:
                 "WHERE r.slug = %s AND s.status = 'published'",
                 (_SLUG,),
             ).fetchone()[0]
-            # One per-source summary (Wikipedia) plus one skipped consensus (a
-            # single source is below the two-source consensus threshold).
-            assert published == 2
+            # Two per-source summaries (Wikipedia + CritiqueBrainz) plus two
+            # skipped consensus blocks (one per license pool; each pool has a
+            # single source, below the two-source consensus threshold).
+            assert published == 4
+
+            # The two sources and two license pools all survived the switch.
+            scopes = conn.execute(
+                "SELECT scope FROM public.summary_runs s "
+                "JOIN public.releases r ON r.id = s.release_id "
+                "WHERE r.slug = %s AND s.status = 'published'",
+                (_SLUG,),
+            ).fetchall()
+            assert {row[0] for row in scopes} == {
+                "source::critiquebrainz",
+                "source::wikipedia",
+                "consensus::CC BY-NC-SA 3.0",
+                "consensus::CC BY-SA 4.0",
+            }
+
+            # The corpus was persisted privately: the full review text lives in
+            # review_document_bodies, never in the public summary claim text.
+            body_count = conn.execute(
+                "SELECT count(*) FROM public.review_document_bodies b "
+                "JOIN public.review_documents d ON d.id = b.document_id "
+                "JOIN public.releases r ON r.id = d.release_id "
+                "WHERE r.slug = %s",
+                (_SLUG,),
+            ).fetchone()[0]
+            assert body_count == 2
     finally:
         _cleanup([_FINGERPRINT])
 
