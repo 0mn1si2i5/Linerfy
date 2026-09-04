@@ -85,7 +85,7 @@ class _FakeCB(CritiqueBrainzAdapter):
 
 
 class _FakeWiki(WikipediaAdapter):
-    def reception_section(self, title):
+    def reception_section(self, title, *, artist=None):
         return ReceptionSection(
             title="Critical reception",
             plain_text="Critics broadly praised the album.",

@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  APPLE_MUSIC_CONTROL_SCRIPTS,
   APPLE_MUSIC_NOW_PLAYING_SCRIPT,
+  SPOTIFY_CONTROL_SCRIPTS,
   SPOTIFY_NOW_PLAYING_SCRIPT,
+  SPOTIFY_SEEK_SCRIPT,
   createAppleMusicProvider,
   createNowPlayingService,
   createSpotifyProvider,
+  type PlaybackAction,
   type NowPlayingTrack,
 } from "./index";
 
@@ -140,5 +144,67 @@ describe("now-playing provider conflict resolution", () => {
     // Apple Music starts playing: it must win over the paused preference.
     appleProvider.getNowPlaying.mockResolvedValue(appleMusicTrack);
     await expect(service.getNowPlaying()).resolves.toEqual(appleMusicTrack);
+  });
+});
+
+describe("playback control and seek", () => {
+  it("maps each transport action to its fixed Spotify program", async () => {
+    const scriptRunner = vi.fn(async () => "");
+    const provider = createSpotifyProvider(scriptRunner);
+
+    for (const action of ["previous", "toggle", "next"] as const) {
+      await provider.control(action);
+      expect(scriptRunner).toHaveBeenLastCalledWith(
+        SPOTIFY_CONTROL_SCRIPTS[action],
+      );
+    }
+  });
+
+  it("maps each transport action to its fixed Apple Music program", async () => {
+    const scriptRunner = vi.fn(async () => "");
+    const provider = createAppleMusicProvider(scriptRunner);
+
+    const actions: PlaybackAction[] = ["previous", "toggle", "next"];
+    for (const action of actions) {
+      await provider.control(action);
+      expect(scriptRunner).toHaveBeenLastCalledWith(
+        APPLE_MUSIC_CONTROL_SCRIPTS[action],
+      );
+    }
+  });
+
+  it("passes the seek position as a separate argument, never interpolated", async () => {
+    const scriptRunner = vi.fn(async () => "");
+    const provider = createSpotifyProvider(scriptRunner);
+
+    await provider.seek(61_000);
+
+    // The program text is the fixed seek script; the position travels as
+    // argv[0] in seconds, so it can never become part of the program string.
+    expect(scriptRunner).toHaveBeenCalledWith(SPOTIFY_SEEK_SCRIPT, ["61"]);
+  });
+
+  it("routes transport controls to the preferred provider", async () => {
+    const spotify = provider(spotifyTrack);
+    const apple = provider(appleMusicTrack);
+    const service = createNowPlayingService([spotify, apple]);
+
+    await service.getNowPlaying(); // establishes the Spotify preference
+
+    await service.control("next");
+    expect(spotify.control).toHaveBeenCalledWith("next");
+    expect(apple.control).not.toHaveBeenCalled();
+  });
+
+  it("routes seek to the preferred provider", async () => {
+    const spotify = provider(spotifyTrack);
+    const apple = provider(appleMusicTrack);
+    const service = createNowPlayingService([spotify, apple]);
+
+    await service.getNowPlaying();
+
+    await service.seek(30_000);
+    expect(spotify.seek).toHaveBeenCalledWith(30_000);
+    expect(apple.seek).not.toHaveBeenCalled();
   });
 });

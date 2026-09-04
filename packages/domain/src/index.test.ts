@@ -42,6 +42,29 @@ describe("contextApiResponseSchema", () => {
     }
   });
 
+  it("accepts a partial response that carries a context and stage", () => {
+    const parsed = contextApiResponseSchema.parse({
+      status: "partial",
+      context: featuredContext,
+      stage: "build_consensus",
+    });
+
+    expect(parsed.status).toBe("partial");
+    if (parsed.status === "partial") {
+      expect(parsed.context.release.title).toBe("Norman Fucking Rockwell!");
+      expect(parsed.stage).toBe("build_consensus");
+    }
+  });
+
+  it("rejects a partial response that omits its context", () => {
+    expect(() =>
+      contextApiResponseSchema.parse({
+        status: "partial",
+        stage: "resolve_entity",
+      }),
+    ).toThrow();
+  });
+
   it("rejects an unknown status", () => {
     expect(() =>
       contextApiResponseSchema.parse({ status: "paused" }),
