@@ -13,5 +13,10 @@ describe("desktop renderer boundary", () => {
       webSecurity: true,
     });
     expect(options.webPreferences?.preload).toBe("/fixed/preload.js");
+    expect(options).toMatchObject({
+      frame: true,
+      minWidth: 360,
+      titleBarStyle: "hiddenInset",
+    });
   });
 });

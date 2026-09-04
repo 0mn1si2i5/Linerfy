@@ -15,7 +15,7 @@ import uuid
 
 from .budget import DbBudgetLedger
 from .critiquebrainz import CritiqueBrainzAdapter
-from .jobs import PostgresJobStore, run_once
+from .jobs import PostgresJobStore, run_batch, run_once
 from .musicbrainz import MusicBrainzAdapter
 from .pipeline import PipelineDeps, build_handlers
 from .providers import ModelConfig, resolve_provider
@@ -136,3 +136,9 @@ def advance_once(
         chat=chat,
     )
     return run_once(PostgresJobStore(), handlers)
+
+
+def advance_batch(*, max_steps: int = 8) -> int:
+    """Advance enough bounded stages to finish one typical current release."""
+    handlers = build_worker_handlers()
+    return run_batch(PostgresJobStore(), handlers, max_steps=max_steps)

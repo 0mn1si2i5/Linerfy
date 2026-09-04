@@ -8,14 +8,14 @@ from pydantic import ValidationError
 from linerfy_ingest.request import NowPlayingRequest, normalize
 
 
-def test_fingerprint_uses_provider_url_when_present() -> None:
+def test_fingerprint_deduplicates_tracks_from_the_same_album() -> None:
     a = NowPlayingRequest(
-        provider="spotify", title="t", artist="a", album="b",
-        provider_url="spotify:track:x",
+        provider="spotify", title="t1", artist="a", album="b",
+        provider_url="spotify:track:1",
     )
     b = NowPlayingRequest(
-        provider="spotify", title="t2", artist="a2", album="b2",
-        provider_url="spotify:track:x",
+        provider="spotify", title="t2", artist="a", album="b",
+        provider_url="spotify:track:2",
     )
     assert a.fingerprint() == b.fingerprint()
 

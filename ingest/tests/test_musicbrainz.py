@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import urllib.error
+
+import pytest
+
+import linerfy_ingest.musicbrainz as musicbrainz_module
 from linerfy_ingest.musicbrainz import (
     MATCH_THRESHOLD,
     MusicBrainzAdapter,
@@ -98,3 +104,70 @@ def test_resolve_reports_not_found_without_candidates() -> None:
     result = resolve_release_group("Nobody", "No Album", FakeMB(payload))
     assert result.status == "not-found"
     assert result.release_group is None
+
+
+class _Response:
+    def __init__(self, payload: bytes = b"{}") -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.payload
+
+
+def test_adapter_spaces_consecutive_musicbrainz_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [10.0]
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        musicbrainz_module.urllib.request,
+        "urlopen",
+        lambda request, timeout: _Response(),
+    )
+    adapter = MusicBrainzAdapter(clock=lambda: now[0], sleep=sleep)
+
+    adapter._get_json("https://musicbrainz.org/first")
+    adapter._get_json("https://musicbrainz.org/second")
+
+    assert sleeps == [pytest.approx(1.05)]
+
+
+def test_adapter_retries_a_transient_503_after_rate_limit_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [10.0]
+    sleeps: list[float] = []
+    calls = 0
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    def urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise urllib.error.HTTPError(
+                request.full_url, 503, "busy", {}, io.BytesIO()
+            )
+        return _Response(b'{"release-groups": []}')
+
+    monkeypatch.setattr(musicbrainz_module.urllib.request, "urlopen", urlopen)
+    adapter = MusicBrainzAdapter(clock=lambda: now[0], sleep=sleep)
+
+    assert adapter._get_json("https://musicbrainz.org/retry") == {
+        "release-groups": []
+    }
+    assert calls == 2
+    assert sleeps == [pytest.approx(1.05)]

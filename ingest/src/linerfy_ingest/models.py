@@ -92,12 +92,16 @@ class CitedClaim(BaseModel):
 
 
 class Genre(BaseModel):
-    """A genre tag attributed to the review documents that support it."""
+    """A genre tag, optionally attributed to supporting review documents.
+
+    MusicBrainz tags are metadata rather than review claims, so they do not
+    invent a review-document citation merely to satisfy this field.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    source_ids: list[str] = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
 
 
 class Summary(BaseModel):
@@ -157,9 +161,7 @@ class IngestedContext(BaseModel):
             if document.release_id != self.release.id
         ]
         if misplaced:
-            raise ValueError(
-                f"review documents reference another release: {sorted(misplaced)}"
-            )
+            raise ValueError(f"review documents reference another release: {sorted(misplaced)}")
 
     def _check_sources_and_policies(self) -> None:
         source_ids = {source.id for source in self.sources}

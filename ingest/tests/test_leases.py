@@ -84,6 +84,25 @@ def test_claim_is_exclusive() -> None:
         _delete_job("lease-2")
 
 
+def test_claim_prioritizes_the_most_recent_now_playing_request() -> None:
+    with connect() as conn:
+        skip_unless_test_db(conn)
+    try:
+        with connect() as conn:
+            _insert_job(conn, "claim-older")
+            _insert_job(conn, "claim-current")
+            conn.execute(
+                "UPDATE public.enrichment_jobs SET created_at = now() - interval '1 hour' "
+                "WHERE entity_id = 'claim-older'"
+            )
+        claimed = PostgresJobStore().reap_and_claim()
+        assert claimed is not None
+        assert claimed.job.entity_id == "claim-current"
+    finally:
+        _delete_job("claim-older")
+        _delete_job("claim-current")
+
+
 def test_stale_lease_commit_is_rejected() -> None:
     with connect() as conn:
         skip_unless_test_db(conn)

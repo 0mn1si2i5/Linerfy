@@ -65,9 +65,7 @@ def test_corpus_hash_changes_with_content() -> None:
 
 def test_corpus_hash_changes_with_kind() -> None:
     a = _corpus()
-    changed = [
-        CorpusDocument(id="guardian-nfr", text="a lush, sprawling record", kind="community")
-    ]
+    changed = [CorpusDocument(id="guardian-nfr", text="a lush, sprawling record", kind="community")]
     assert corpus_hash(a) != corpus_hash(changed)
 
 
@@ -92,6 +90,15 @@ def test_documents_are_delimited_and_ids_present() -> None:
     assert "</document>" in user
     assert "<documents>" in user and "</documents>" in user
     assert "json" in user.lower()
+
+
+def test_prompt_requires_direct_factual_language() -> None:
+    user = _build_user_prompt(_corpus())
+
+    assert "评论普遍认为" in user
+    assert "展现了" in user
+    assert "事实陈述" in user
+    assert "不写导语、结语、比喻、排比、反问、宣传语" in user
 
 
 # --- claim parsing ----------------------------------------------------------
@@ -172,9 +179,7 @@ def test_parse_claims_rejects_invalid_json() -> None:
 
 
 def test_summarize_returns_validated_summary() -> None:
-    summary = summarize(
-        _corpus(), chat=_fake_chat(_payload(_three_claims()))
-    )
+    summary = summarize(_corpus(), chat=_fake_chat(_payload(_three_claims())))
     assert len(summary.claims) == 3
     assert summary.model == "deepseek-chat"
     assert summary.locale == "zh-CN"

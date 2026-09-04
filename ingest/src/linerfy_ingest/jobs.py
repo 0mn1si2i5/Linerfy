@@ -248,6 +248,19 @@ def run_once(store: JobStore, handlers: dict[Stage, StageHandler]) -> int:
     return 1
 
 
+def run_batch(
+    store: JobStore, handlers: dict[Stage, StageHandler], *, max_steps: int
+) -> int:
+    """Advance a small bounded batch, stopping as soon as the queue is idle."""
+    processed = 0
+    for _ in range(max_steps):
+        advanced = run_once(store, handlers)
+        if not advanced:
+            break
+        processed += advanced
+    return processed
+
+
 class PostgresJobStore:
     """Job queue backed by ``enrichment_jobs``; each op is a short transaction."""
 
@@ -293,7 +306,10 @@ class PostgresJobStore:
             "payload, resolved_release_group_id, resolution_status "
             "FROM public.enrichment_jobs j "
             f"WHERE j.state = 'queued' {stage_filter} "
-            "ORDER BY j.updated_at FOR UPDATE SKIP LOCKED LIMIT 1"
+            # Linerfy serves the album currently playing. Prioritize the newest
+            # request and keep advancing it across ticks; older work resumes
+            # when no newer album is waiting.
+            "ORDER BY j.created_at DESC FOR UPDATE SKIP LOCKED LIMIT 1"
         ).fetchone()
         if row is None:
             return None

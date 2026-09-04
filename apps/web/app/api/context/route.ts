@@ -44,6 +44,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const slug = releaseSlug(parsed.data.artist, parsed.data.album);
+  const existing = await getContextBySlug(slug);
+  if (existing.status === "ok") {
+    return NextResponse.json({ status: "ready", context: existing.context });
+  }
+  if (existing.status === "query-failed" || existing.status === "invalid") {
+    return NextResponse.json({ error: "context read failed" }, { status: 500 });
+  }
+
   const fingerprint = requestFingerprint(parsed.data);
   const supabase = serviceClient();
 
@@ -58,9 +67,7 @@ export async function POST(request: NextRequest) {
 
   if (job) {
     if (job.state === "ready") {
-      const result = await getContextBySlug(
-        releaseSlug(parsed.data.artist, parsed.data.album),
-      );
+      const result = await getContextBySlug(slug);
       if (result.status === "ok") {
         return NextResponse.json({ status: "ready", context: result.context });
       }

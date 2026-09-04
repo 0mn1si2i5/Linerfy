@@ -9,15 +9,21 @@ deliberately conservative: a result below the score threshold is reported as
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 
 from .entities import EntityMatchResult, ReleaseGroup
 
 _MB_BASE = "https://musicbrainz.org/ws/2"
 _CAA_BASE = "https://coverartarchive.org"
 # MusicBrainz requires an identifying, contact-bearing User-Agent.
-_USER_AGENT = "Linerfy/0.0 (music-criticism companion; rights@linerfy.local)"
+_USER_AGENT = "Linerfy/0.1 (https://github.com/0mn1si2i5/Linerfy)"
+_MIN_REQUEST_INTERVAL_SECONDS = 1.05
+_RETRYABLE_HTTP_STATUS = frozenset({429, 502, 503, 504})
+_MAX_ATTEMPTS = 3
 
 # MusicBrainz Lucene search scores range 0-100; below this we refuse to match.
 MATCH_THRESHOLD = 80
@@ -38,16 +44,45 @@ def front_url(release_group_mbid: str) -> str:
 class MusicBrainzAdapter:
     """Read-only MusicBrainz client, stubbable via ``_get_json`` for tests."""
 
-    def __init__(self, user_agent: str = _USER_AGENT) -> None:
+    def __init__(
+        self,
+        user_agent: str = _USER_AGENT,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.user_agent = user_agent
+        self._clock = clock
+        self._sleep = sleep
+        self._last_request_at: float | None = None
+
+    def _wait_for_request_slot(self) -> None:
+        if self._last_request_at is not None:
+            remaining = (
+                _MIN_REQUEST_INTERVAL_SECONDS
+                - (self._clock() - self._last_request_at)
+            )
+            if remaining > 0:
+                self._sleep(remaining)
+        self._last_request_at = self._clock()
 
     def _get_json(self, url: str) -> dict:
         request = urllib.request.Request(
             url,
             headers={"User-Agent": self.user_agent, "Accept": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode("utf-8"))
+        for attempt in range(_MAX_ATTEMPTS):
+            self._wait_for_request_slot()
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if (
+                    exc.code not in _RETRYABLE_HTTP_STATUS
+                    or attempt == _MAX_ATTEMPTS - 1
+                ):
+                    raise
+        raise AssertionError("unreachable")
 
     def search_release_groups(self, artist: str, album: str) -> list[ReleaseGroup]:
         query = f'releasegroup:"{album}" AND artist:"{artist}"'

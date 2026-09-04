@@ -10,9 +10,9 @@ export interface WindowStyleOptions {
   y?: number;
   resizable?: boolean;
   movable?: boolean;
-  frame?: boolean;
   alwaysOnTop?: boolean;
   skipTaskbar?: boolean;
+  show?: boolean;
 }
 
 /**
@@ -27,10 +27,13 @@ export function createWindowOptions(
   return {
     width: 1080,
     height: 760,
-    minWidth: 760,
+    minWidth: 360,
     minHeight: 560,
-    backgroundColor: "#f3efe5",
+    backgroundColor: "#121212",
     title: "Linerfy",
+    frame: true,
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 14, y: 20 },
     ...style,
     webPreferences: {
       preload,

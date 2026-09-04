@@ -1,55 +1,19 @@
-import { featuredContext } from "@linerfy/domain/fixtures";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { ContextResult } from "../lib/catalog";
 import { HomePage } from "./home-page";
 
 describe("Linerfy home page", () => {
-  it("renders criticism with a route back to every source", () => {
-    const result: ContextResult = {
-      status: "ok",
-      context: featuredContext,
-    };
-    const html = renderToStaticMarkup(createElement(HomePage, { result }));
+  it("shows only operational status and no search or marketing copy", () => {
+    const html = renderToStaticMarkup(createElement(HomePage));
 
     expect(html).toContain("Linerfy");
-    expect(html).toContain("不替你播放");
-    expect(html).toContain("只在你想知道时出现");
-    expect(html).toContain("查看原文");
-    expect(html).toContain("Pitchfork");
-    expect(html).toContain("查看完整语境");
-    expect(html).toContain('href="/context/norman-fucking-rockwell"');
-  });
-
-  it("shows an explicit missing-coverage state when the release is not found", () => {
-    const result: ContextResult = { status: "not-found" };
-    const html = renderToStaticMarkup(createElement(HomePage, { result }));
-
-    expect(html).toContain("这张专辑还没有被覆盖");
-    expect(html).not.toContain("查看原文");
-  });
-
-  it("does not render a query failure as missing coverage", () => {
-    const result: ContextResult = {
-      status: "query-failed",
-      message: "connection refused",
-    };
-    const html = renderToStaticMarkup(createElement(HomePage, { result }));
-
-    expect(html).toContain("语境暂时无法加载");
-    expect(html).not.toContain("这张专辑还没有被覆盖");
-  });
-
-  it("does not render invalid catalog data as missing coverage", () => {
-    const result: ContextResult = {
-      status: "invalid",
-      message: "catalog is missing an artist or release",
-    };
-    const html = renderToStaticMarkup(createElement(HomePage, { result }));
-
-    expect(html).toContain("语境数据异常");
-    expect(html).not.toContain("这张专辑还没有被覆盖");
+    expect(html).toContain("当前播放");
+    expect(html).toContain("由桌面端读取");
+    expect(html).toContain("认证与 API");
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain("搜索歌曲");
+    expect(html).not.toContain("想多知道");
   });
 });

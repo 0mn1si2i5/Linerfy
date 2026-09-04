@@ -1,0 +1,7 @@
+*
+!ingest
+!ingest/**
+ingest/.venv/**
+ingest/**/__pycache__/**
+ingest/.pytest_cache/**
+ingest/.ruff_cache/**

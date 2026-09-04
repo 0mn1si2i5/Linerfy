@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from .critiquebrainz import CRITIQUEBRAINZ_SOURCE, CritiqueBrainzAdapter
 from .db import connect, seed
-from .enrich import build_documents, corpus_from_documents
+from .enrich import build_documents, corpus_from_documents, genres_from_release_group
 from .jobs import (
     EnrichmentJob,
     JobStore,
@@ -117,12 +117,14 @@ def _fetch_sources(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> boo
     )
     source_ids = {document.source_id for document in documents}
     sources: list[ReviewSource] = [
-        source
-        for source in (CRITIQUEBRAINZ_SOURCE, WIKIPEDIA_SOURCE)
-        if source.id in source_ids
+        source for source in (CRITIQUEBRAINZ_SOURCE, WIKIPEDIA_SOURCE) if source.id in source_ids
     ]
     context = IngestedContext(
-        release=release, artist=artist, sources=sources, review_documents=documents
+        release=release,
+        artist=artist,
+        sources=sources,
+        review_documents=documents,
+        genres=genres_from_release_group(release_group),
     )
     # One transaction: verify the active lease, seed the corpus, and record the
     # corpus hash together. An expired worker can neither write review documents
@@ -130,9 +132,7 @@ def _fetch_sources(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> boo
     with connect(autocommit=False) as conn:
         assert_active_lease(conn, job.id, lease_id)
         seed(conn, context)
-        record_corpus_hash(
-            conn, job.id, lease_id, corpus_hash(corpus_from_documents(documents))
-        )
+        record_corpus_hash(conn, job.id, lease_id, corpus_hash(corpus_from_documents(documents)))
         conn.commit()
     return True
 
@@ -255,9 +255,7 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
                 attribution=attribution,
             )
             with connect(autocommit=False) as conn:
-                publish_summary(
-                    conn, slug, consensus, job_id=job.id, lease_id=lease_id
-                )
+                publish_summary(conn, slug, consensus, job_id=job.id, lease_id=lease_id)
         deps.store.commit(job.id, lease_id, stage=job.stage, state="queued")
         return False
     return True

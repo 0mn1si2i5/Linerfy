@@ -1,5 +1,7 @@
 "use client";
 
+import { LinerfyMark } from "@linerfy/ui";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
@@ -39,13 +41,29 @@ function Exchange() {
     });
   }, [code, oauthError, router]);
 
-  return <p>{message}</p>;
+  return (
+    <div className="auth-card compact">
+      <LinerfyMark />
+      <p>{message}</p>
+      {!code || oauthError ? (
+        <Link className="quiet-link" href="/login">
+          回到登录
+        </Link>
+      ) : null}
+    </div>
+  );
 }
 
 export default function AuthCallbackPage() {
   return (
-    <main>
-      <Suspense fallback={<p>正在完成登录…</p>}>
+    <main className="auth-shell">
+      <Suspense
+        fallback={
+          <div className="auth-card compact">
+            <p>正在完成登录…</p>
+          </div>
+        }
+      >
         <Exchange />
       </Suspense>
     </main>

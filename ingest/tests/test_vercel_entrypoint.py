@@ -98,9 +98,9 @@ def test_do_post_valid_auth_enters_worker_tick(
     module = _load_entrypoint()
     instance, request = _instance(module)
     instance.headers = {"Authorization": "Bearer s3cret"}
-    monkeypatch.setattr(module, "advance_once", lambda: 1)
+    monkeypatch.setattr(module, "advance_batch", lambda: 4)
     instance.do_POST()
-    assert b'"processed": 1' in request.wfile.getvalue()
+    assert b'"processed": 4' in request.wfile.getvalue()
 
 
 def test_do_post_controlled_error_leaks_nothing(
@@ -114,7 +114,7 @@ def test_do_post_controlled_error_leaks_nothing(
     def boom() -> int:
         raise RuntimeError("a secret review body and api-key must not leak")
 
-    monkeypatch.setattr(module, "advance_once", boom)
+    monkeypatch.setattr(module, "advance_batch", boom)
     instance.do_POST()
 
     body = request.wfile.getvalue()

@@ -7,6 +7,7 @@ from linerfy_ingest.jobs import (
     EnrichmentJob,
     StaleLease,
     next_stage,
+    run_batch,
     run_job,
     run_once,
 )
@@ -126,3 +127,12 @@ def test_run_once_is_idle_with_no_jobs() -> None:
     store = FakeStore()
     assert run_once(store, {}) == 0
     assert store.actions == []
+
+
+def test_run_batch_advances_available_work_until_idle() -> None:
+    store = FakeStore([_job("resolve_entity"), _job("resolve_entity")])
+    processed = run_batch(
+        store, {"resolve_entity": lambda job, lease: True}, max_steps=8
+    )
+    assert processed == 2
+    assert store.reaped == 3  # final idle check stops the bounded loop

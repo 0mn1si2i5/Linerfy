@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   defaultWindowState,
   loadWindowState,
-  popoverHeight,
   sanitizeWindowState,
   saveWindowState,
 } from "./window-state";
@@ -66,10 +65,5 @@ describe("window state", () => {
 
     await fs.writeFile(file, "{ not json", "utf-8");
     await expect(loadWindowState(file)).resolves.toEqual(defaultWindowState());
-  });
-
-  it("computes popover height as 70% of the work area, with a floor", () => {
-    expect(popoverHeight(1000)).toBe(700);
-    expect(popoverHeight(100)).toBe(200);
   });
 });

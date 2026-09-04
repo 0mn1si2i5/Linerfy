@@ -1,8 +1,8 @@
 """Vercel Python Function that advances the enrichment queue.
 
 Deployed as the Worker Vercel Project (root directory ``ingest``). Supabase Cron
-POSTs here once a minute; each call verifies the worker secret, reaps expired
-leases, claims at most one job, and runs one bounded stage. External HTTP and
+POSTs here once a minute; each call verifies the worker secret and advances a
+small bounded batch. External HTTP and
 model work happen outside any database transaction; the durable budget ledger
 serialises reservations so concurrent invocations cannot exceed the cap.
 
@@ -28,7 +28,7 @@ from pathlib import Path
 # `ingest/src`. Make it importable regardless of how the runtime installs it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from linerfy_ingest.worker import advance_once, check_worker_auth  # noqa: E402
+from linerfy_ingest.worker import advance_batch, check_worker_auth  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
@@ -47,7 +47,7 @@ class handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            processed = advance_once()
+            processed = advance_batch()
             self._json(200, {"processed": processed})
         except Exception as exc:  # never leak internals to the caller
             # Default: log only the error category. Full tracebacks are opt-in

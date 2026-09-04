@@ -15,7 +15,7 @@ v1 ships no search, content home, recommendations, favorites, social features, c
 ## 形态 / Shape
 
 - **macOS companion**（`apps/desktop`）：菜单栏 popover 与全局快捷键打开，读取当前播放、完成 GitHub OAuth 登录，并展示完整语境（曲风/标签/评分/单来源总结/综合观点/引用/链接）。
-- **Vercel API**（`apps/web`）：已认证 API（`POST /api/context` 在线创建任务 + `/api/context/[slug]` 读语境）、GitHub OAuth 回调、最小登录/结果页，以及受保护的 worker route（`/api/enrichment/run`，由 Supabase Cron 每分钟调用）。
+- **Vercel API**（`apps/web`）：已认证 API（`POST /api/context` 在线创建任务 + `/api/context/[slug]` 读语境）、GitHub OAuth 回调、说明网页，以及受保护的 worker route（`/api/enrichment/run`，由 Supabase Cron 每分钟调用）。说明网页不读取当前播放，也不提供搜索。
 - **采集**（`ingest`）：实体匹配、许可来源、模型总结的批处理管线。
 - **存储**（`supabase/migrations`）：catalog、enrichment jobs 与行级权限。
 
@@ -48,6 +48,17 @@ pnpm install
 pnpm --filter @linerfy/desktop dev   # macOS companion
 pnpm --filter @linerfy/web dev       # API + OAuth + smoke
 ```
+
+打包并打开桌面版：
+
+```bash
+pnpm package:desktop
+open "apps/desktop/out/Linerfy-darwin-arm64/Linerfy.app"
+```
+
+桌面构建会把 Supabase URL、publishable key 和 Web API URL 作为公开客户端配置写入应用；service-role、模型 key 和 worker secret 永不进入桌面包。打开后点菜单栏里的 Linerfy 图标，或按 `⌘⇧L`。网页不会也不能直接读取 macOS 播放器。
+
+Build and open the desktop app with the commands above. The build embeds only public client configuration (Supabase URL, publishable key, and Web API URL); server and model secrets never enter the app. Open it from the menu bar or press `⌘⇧L`. The website does not read macOS playback directly.
 
 第一次读取 Spotify 或 Music 时，macOS 会请求 Automation 权限。应用只通过最小 preload bridge 接收当前曲目的元数据，播放器元数据始终视为不可信输入。
 
@@ -85,7 +96,7 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 > 以下标注依据 fresh 验证（测试 + 类型检查 + 构建 + 代码路径），不代表生产联调通过。
 
-- **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；Web 页面认证门禁（`/` 与 `/context/[slug]` 只读已认证 API，service-role 仅在服务端）；可追溯中文总结（模型边界、按 scope 原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 四阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
-- **生产基础设施已就绪，OAuth 待复验**：生产 Supabase 迁移、Vercel Web/worker、Vault 与定时 worker 已配置；GitHub OAuth 的 PKCE 修复需部署后完成端到端登录复验。
+- **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；公开说明页与已认证 `/context/[slug]`、service-role 仅在服务端；可追溯中文总结（模型边界、按 scope 原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 四阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
+- **生产基础设施与 Web OAuth 已联调**：生产 Supabase 迁移、Vercel Web/worker、Vault 与定时 worker 已配置；GitHub OAuth 的浏览器登录已于 2026-09-04 复验通过。桌面 OAuth 仍需用重新打包的 `.app` 做一次人工回环验证。
 
 细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。

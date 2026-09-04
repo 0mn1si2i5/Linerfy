@@ -38,6 +38,29 @@ _REF_RE = re.compile(r"<ref[^>]*>.*?</ref>|<ref[^>]*/>", re.DOTALL | re.IGNORECA
 _TEMPLATE_RE = re.compile(r"\{\{[^{}]*\}\}")
 _LINK_RE = re.compile(r"\[\[([^\]|]*\|)?([^\]]*)\]\]")
 _TAG_RE = re.compile(r"<[^>]+>")
+_SMART_QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'})
+
+
+def normalize_article_title(title: str) -> str:
+    """Normalize typographic quotes that prevent exact MediaWiki title lookup."""
+    normalized = title.translate(_SMART_QUOTES)
+    # MediaWiki normalizes the literal first character, but not the first word
+    # when a title starts with punctuation such as "(pronounced ...)".
+    return re.sub(
+        r"^(\W*)([a-z])",
+        lambda match: match.group(1) + match.group(2).upper(),
+        normalized,
+        count=1,
+    )
+
+
+def article_title_matches(requested: str, candidate: str) -> bool:
+    """Accept an exact title or the same title with a disambiguation suffix."""
+    requested_key = normalize_article_title(requested).casefold().strip()
+    candidate_key = normalize_article_title(candidate).casefold().strip()
+    return candidate_key == requested_key or candidate_key.startswith(
+        requested_key + " ("
+    )
 
 
 def strip_wikitext(raw: str) -> str:
@@ -62,6 +85,7 @@ def strip_wikitext(raw: str) -> str:
 class ReceptionSection:
     title: str
     plain_text: str
+    article_title: str | None = None
 
 
 class WikipediaAdapter:
@@ -93,17 +117,51 @@ class WikipediaAdapter:
         payload = self._get_json(url)
         return payload.get("parse", {}).get("wikitext", {}).get("*", "")
 
-    def reception_section(self, title: str) -> ReceptionSection | None:
-        """Return the critical-reception section, or None when absent."""
-        for section in self.list_sections(title):
+    def search_article_titles(self, title: str, artist: str) -> list[str]:
+        query = f'"{title}" {artist} album'
+        url = (
+            f"{_API_BASE}?action=query&list=search"
+            f"&srsearch={urllib.parse.quote(query)}&srlimit=3&format=json"
+        )
+        payload = self._get_json(url)
+        return [
+            str(item["title"])
+            for item in payload.get("query", {}).get("search", [])
+            if item.get("title")
+        ]
+
+    def reception_section(
+        self, title: str, *, artist: str | None = None
+    ) -> ReceptionSection | None:
+        """Return a reception section from the exact or a searched article."""
+        normalized = normalize_article_title(title)
+        exact = self._reception_section_for_title(normalized)
+        if exact is not None or not artist:
+            return exact
+        for article_title in dict.fromkeys(
+            self.search_article_titles(normalized, artist)
+        ):
+            if not article_title_matches(normalized, article_title):
+                continue
+            found = self._reception_section_for_title(article_title)
+            if found is not None:
+                return found
+        return None
+
+    def _reception_section_for_title(
+        self, article_title: str
+    ) -> ReceptionSection | None:
+        """Read one exact MediaWiki article title without doing discovery."""
+        for section in self.list_sections(article_title):
             line = (section.get("line") or "").strip().lower()
             if line in _RECEPTION_HEADINGS:
                 index = str(section.get("index", ""))
                 if index:
-                    wikitext = self.section_wikitext(title, index)
+                    wikitext = self.section_wikitext(article_title, index)
                     return ReceptionSection(
                         title=section.get("line", "Reception"),
                         plain_text=strip_wikitext(wikitext),
+                        article_title=article_title,
                     )
         return None
 
@@ -141,7 +199,7 @@ def to_document(
         id=f"wikipedia-{release.id}-reception",
         release_id=release.id,
         source_id=WIKIPEDIA_SOURCE.id,
-        source_url=page_url(article_title),
+        source_url=page_url(section.article_title or article_title),
         title=f"{release.title} — {section.title}",
         author=None,
         published_at=None,

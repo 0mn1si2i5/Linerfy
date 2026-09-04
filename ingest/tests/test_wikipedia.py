@@ -6,6 +6,8 @@ from linerfy_ingest.models import ReleaseEntity
 from linerfy_ingest.wikipedia import (
     WIKIPEDIA_POLICY,
     WikipediaAdapter,
+    article_title_matches,
+    normalize_article_title,
     page_url,
     strip_wikitext,
     to_document,
@@ -78,9 +80,43 @@ def test_reception_section_returns_none_without_heading() -> None:
     assert adapter.reception_section("Some Album") is None
 
 
+def test_reception_section_uses_a_ranked_article_fallback() -> None:
+    class SearchingWikipedia(WikipediaAdapter):
+        def search_article_titles(self, title: str, artist: str) -> list[str]:
+            assert artist == "Lynyrd Skynyrd"
+            return ["MusicBrainz title (album)"]
+
+        def list_sections(self, title: str) -> list[dict]:
+            return [] if title != "MusicBrainz title (album)" else [
+                {"index": "2", "line": "Reception"}
+            ]
+
+        def section_wikitext(self, title: str, index: str) -> str:
+            return "The album received positive reviews."
+
+    section = SearchingWikipedia().reception_section(
+        "MusicBrainz title", artist="Lynyrd Skynyrd"
+    )
+    assert section is not None
+    assert section.article_title == "MusicBrainz title (album)"
+
+
 def test_page_url_encodes_title() -> None:
     assert page_url("Norman Fucking Rockwell!") == (
         "https://en.wikipedia.org/wiki/Norman_Fucking_Rockwell%21"
+    )
+
+
+def test_normalize_article_title_replaces_musicbrainz_smart_quotes() -> None:
+    assert normalize_article_title("(pronounced ’lĕh-’nérd ’skin-’nérd)") == (
+        "(Pronounced 'lĕh-'nérd 'skin-'nérd)"
+    )
+
+
+def test_article_title_match_allows_disambiguation_but_rejects_other_albums() -> None:
+    assert article_title_matches("Shelly", "Shelly (album)")
+    assert not article_title_matches(
+        "Shelly", "Empathy (Bill Evans and Shelly Manne album)"
     )
 
 

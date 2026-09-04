@@ -8,6 +8,9 @@ export interface NowPlayingTrack {
   album: string;
   state: PlaybackState;
   providerUrl?: string;
+  artworkUrl?: string;
+  durationMs?: number;
+  positionMs?: number;
 }
 
 export interface NowPlayingProvider {
@@ -29,6 +32,9 @@ if (!spotify.running() || spotify.playerState() === "stopped") {
     album: track.album(),
     state: spotify.playerState() === "playing" ? "playing" : "paused",
     providerUrl: track.spotifyUrl(),
+    artworkUrl: track.artworkUrl(),
+    durationMs: Math.round(track.duration()),
+    positionMs: Math.round(spotify.playerPosition() * 1000),
   });
 }
 `.trim();
@@ -45,12 +51,28 @@ if (!music.running() || music.playerState() === "stopped") {
     artist: track.artist(),
     album: track.album(),
     state: music.playerState() === "playing" ? "playing" : "paused",
+    durationMs: Math.round(track.duration() * 1000),
+    positionMs: Math.round(music.playerPosition() * 1000),
   });
 }
 `.trim();
 
 function isPlaybackState(value: unknown): value is PlaybackState {
   return value === "playing" || value === "paused";
+}
+
+function isAllowedArtworkUrl(
+  value: unknown,
+  provider: NowPlayingProviderName,
+): value is string {
+  if (value === undefined) return true;
+  if (typeof value !== "string" || provider !== "spotify") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "i.scdn.co";
+  } catch {
+    return false;
+  }
 }
 
 function parseTrack(
@@ -63,13 +85,24 @@ function parseTrack(
     throw new Error(`Invalid ${provider} now-playing result`);
 
   const track = value as Record<string, unknown>;
+  const validTiming =
+    (track.durationMs === undefined && track.positionMs === undefined) ||
+    (typeof track.durationMs === "number" &&
+      Number.isFinite(track.durationMs) &&
+      track.durationMs > 0 &&
+      typeof track.positionMs === "number" &&
+      Number.isFinite(track.positionMs) &&
+      track.positionMs >= 0);
   if (
     track.provider !== provider ||
     typeof track.title !== "string" ||
     typeof track.artist !== "string" ||
     typeof track.album !== "string" ||
     !isPlaybackState(track.state) ||
-    (track.providerUrl !== undefined && typeof track.providerUrl !== "string")
+    (track.providerUrl !== undefined &&
+      typeof track.providerUrl !== "string") ||
+    !isAllowedArtworkUrl(track.artworkUrl, provider) ||
+    !validTiming
   ) {
     throw new Error(`Invalid ${provider} now-playing result`);
   }
@@ -82,6 +115,16 @@ function parseTrack(
     state: track.state,
     ...(typeof track.providerUrl === "string"
       ? { providerUrl: track.providerUrl }
+      : {}),
+    ...(typeof track.artworkUrl === "string"
+      ? { artworkUrl: track.artworkUrl }
+      : {}),
+    ...(typeof track.durationMs === "number" &&
+    typeof track.positionMs === "number"
+      ? {
+          durationMs: track.durationMs,
+          positionMs: Math.min(track.positionMs, track.durationMs),
+        }
       : {}),
   };
 }

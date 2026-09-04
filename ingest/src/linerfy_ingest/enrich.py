@@ -10,9 +10,9 @@ from __future__ import annotations
 from .critiquebrainz import CritiqueBrainzAdapter
 from .critiquebrainz import to_document as cb_document
 from .entities import ReleaseGroup
-from .models import ReleaseEntity, ReviewDocument, Summary, license_pool
+from .models import Genre, ReleaseEntity, ReviewDocument, Summary, license_pool
 from .summarize import CorpusDocument, summarize
-from .wikipedia import WikipediaAdapter
+from .wikipedia import WikipediaAdapter, normalize_article_title
 from .wikipedia import to_document as wiki_document
 
 
@@ -46,6 +46,22 @@ def group_by_pool(
     return grouped
 
 
+def genres_from_release_group(release_group: ReleaseGroup) -> list[Genre]:
+    """Return a short, deduplicated display list from MusicBrainz tags."""
+    genres: list[Genre] = []
+    seen: set[str] = set()
+    for raw_tag in release_group.tags:
+        tag = " ".join(raw_tag.split())
+        key = tag.casefold()
+        if not tag or key in seen:
+            continue
+        seen.add(key)
+        genres.append(Genre(name=tag.title() if tag.islower() else tag, source_ids=[]))
+        if len(genres) == 6:
+            break
+    return genres
+
+
 def build_documents(
     release_group: ReleaseGroup,
     release: ReleaseEntity,
@@ -57,7 +73,8 @@ def build_documents(
     documents: list[ReviewDocument] = []
     for review in critiquebrainz.search_reviews(release_group.mbid):
         documents.append(cb_document(review, release))
-    reception = wikipedia.reception_section(article_title)
+    article_title = normalize_article_title(article_title)
+    reception = wikipedia.reception_section(article_title, artist=release_group.artist)
     if reception is not None:
         documents.append(wiki_document(reception, release, article_title))
     return documents
@@ -79,12 +96,8 @@ def enrich_release(
     cite documents from two different pools. The result maps pool id (a license
     id) to that pool's validated summary.
     """
-    documents = build_documents(
-        release_group, release, article_title, critiquebrainz, wikipedia
-    )
+    documents = build_documents(release_group, release, article_title, critiquebrainz, wikipedia)
     summaries: dict[str, Summary] = {}
     for pool, pool_documents in group_by_pool(documents).items():
-        summaries[pool] = summarize(
-            corpus_from_documents(pool_documents), model=model, chat=chat
-        )
+        summaries[pool] = summarize(corpus_from_documents(pool_documents), model=model, chat=chat)
     return summaries

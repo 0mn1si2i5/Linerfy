@@ -16,6 +16,9 @@ const spotifyTrack = {
   album: "Midnights",
   state: "playing",
   providerUrl: "spotify:track:example",
+  artworkUrl: "https://i.scdn.co/image/example",
+  durationMs: 234_000,
+  positionMs: 61_000,
 } satisfies NowPlayingTrack;
 
 const appleMusicTrack = {
@@ -55,6 +58,19 @@ describe("now-playing providers", () => {
         title: "x",
         artist: "y",
         album: "z",
+      }),
+    );
+
+    await expect(
+      createSpotifyProvider(scriptRunner).getNowPlaying(),
+    ).rejects.toThrow("Invalid spotify now-playing result");
+  });
+
+  it("rejects artwork outside Spotify's image host", async () => {
+    const scriptRunner = vi.fn(async () =>
+      JSON.stringify({
+        ...spotifyTrack,
+        artworkUrl: "https://example.com/untrusted.png",
       }),
     );
 

@@ -15,21 +15,17 @@ export default function Page() {
 
   return (
     <main>
-      <nav className="site-nav" aria-label="Main navigation">
+      <nav className="app-bar" aria-label="Main navigation">
         <Link className="brand" href="/">
           <LinerfyMark />
           <span>Linerfy</span>
         </Link>
-        <span className="preview-pill">EARLY LISTENING</span>
+        <Link className="button secondary" href="/">
+          返回
+        </Link>
       </nav>
 
-      <section className="featured">
-        <div className="featured-intro">
-          <p className="eyebrow">CONTEXT</p>
-          <p>
-            <Link href="/">← 返回</Link>
-          </p>
-        </div>
+      <section className="context-page">
         {state.status === "loading" ? (
           <p className="empty-state">正在加载…</p>
         ) : state.status === "unauthenticated" ? (

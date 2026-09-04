@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-/** Persisted window geometry: the locked flag plus the last normal-window bounds. */
+/** Persisted window geometry and whether the current bounds are locked. */
 export interface WindowState {
   locked: boolean;
   width: number;
@@ -10,9 +10,6 @@ export interface WindowState {
   y?: number;
 }
 
-/** Popover width (px). Height is computed from the screen's work area. */
-export const POPOVER_WIDTH = 440;
-export const POPOVER_HEIGHT_RATIO = 0.7;
 export const MIN_WINDOW_DIMENSION = 200;
 
 export function defaultWindowState(): WindowState {
@@ -53,12 +50,4 @@ export async function saveWindowState(
 ): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(state, null, 2), "utf-8");
-}
-
-/** Height of the popover for a given screen work-area height (70%, rounded). */
-export function popoverHeight(workAreaHeight: number): number {
-  return Math.max(
-    MIN_WINDOW_DIMENSION,
-    Math.round(workAreaHeight * POPOVER_HEIGHT_RATIO),
-  );
 }

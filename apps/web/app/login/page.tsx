@@ -1,5 +1,7 @@
 "use client";
 
+import { LinerfyMark } from "@linerfy/ui";
+import Link from "next/link";
 import { useState } from "react";
 
 import { createBrowserAuthClient } from "../../lib/browser-auth";
@@ -28,23 +30,35 @@ export default function LoginPage() {
 
   if (!configured) {
     return (
-      <main>
-        <p>
-          GitHub OAuth 未配置：缺少 NEXT_PUBLIC_SUPABASE_URL 或
-          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY。
-        </p>
+      <main className="auth-shell">
+        <div className="auth-card">
+          <LinerfyMark />
+          <p role="alert">登录配置缺失</p>
+        </div>
       </main>
     );
   }
 
   return (
-    <main>
-      <h1>登录 Linerfy</h1>
-      <p>使用 GitHub 账号登录，以读取乐评语境。</p>
-      <button type="button" onClick={() => void signIn()}>
-        使用 GitHub 登录
-      </button>
-      {error ? <p role="alert">{error}</p> : null}
+    <main className="auth-shell">
+      <div className="auth-card">
+        <LinerfyMark />
+        <button
+          className="button primary auth-action"
+          type="button"
+          onClick={() => void signIn()}
+        >
+          使用 GitHub 登录
+        </button>
+        <Link className="quiet-link" href="/">
+          返回
+        </Link>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
     </main>
   );
 }

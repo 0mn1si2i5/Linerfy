@@ -62,12 +62,14 @@ describe("requestFingerprint", () => {
     expect(a).toBe(b);
   });
 
-  it("prefers the provider URL over artist/album", () => {
-    const withUrl = requestFingerprint(
-      np({ providerUrl: "spotify:track:123" }),
+  it("deduplicates tracks from the same album", () => {
+    const firstTrack = requestFingerprint(
+      np({ title: "Track 1", providerUrl: "spotify:track:1" }),
     );
-    const withoutUrl = requestFingerprint(np());
-    expect(withUrl).not.toBe(withoutUrl);
+    const secondTrack = requestFingerprint(
+      np({ title: "Track 2", providerUrl: "spotify:track:2" }),
+    );
+    expect(firstTrack).toBe(secondTrack);
   });
 
   it("separates different albums", () => {

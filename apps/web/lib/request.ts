@@ -23,9 +23,7 @@ function normalize(value: string): string {
 
 /** Mirrors `NowPlayingRequest.fingerprint()` in the ingest package. */
 export function requestFingerprint(request: NowPlayingRequest): string {
-  const key = request.providerUrl
-    ? `${request.provider}:${normalize(request.providerUrl)}`
-    : `${request.provider}:${normalize(request.artist)}|${normalize(request.album)}`;
+  const key = `${request.provider}:${normalize(request.artist)}|${normalize(request.album)}`;
   return createHash("sha256").update(key, "utf8").digest("hex");
 }
 

@@ -44,7 +44,9 @@ export const reviewExcerptSchema = z.object({
 
 export const genreSchema = z.object({
   name: z.string().min(1),
-  sourceIds: z.array(z.string().min(1)).min(1),
+  // Metadata authorities such as MusicBrainz may supply a tag without a
+  // review-document citation. Generated claims still require citations.
+  sourceIds: z.array(z.string().min(1)).default([]),
 });
 
 export const citedClaimSchema = z.object({

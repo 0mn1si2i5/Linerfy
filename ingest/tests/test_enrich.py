@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 
+import linerfy_ingest.pipeline as pipeline
 from linerfy_ingest.critiquebrainz import CritiqueBrainzAdapter
 from linerfy_ingest.critiquebrainz import to_document as cb_document
 from linerfy_ingest.enrich import (
@@ -78,13 +79,8 @@ def _echo_chat():
     def chat(messages):
         user = messages[-1]["content"]
         ids = re.findall(r'<document id="([^"]+)"', user)
-        claims = [
-            {"text": f"观点 {i + 1}", "source_ids": [ids[i % len(ids)]]}
-            for i in range(3)
-        ]
-        return ChatResult(
-            content=json.dumps({"claims": claims}), finish_reason="stop"
-        )
+        claims = [{"text": f"观点 {i + 1}", "source_ids": [ids[i % len(ids)]]} for i in range(3)]
+        return ChatResult(content=json.dumps({"claims": claims}), finish_reason="stop")
 
     return chat
 
@@ -101,11 +97,27 @@ def test_corpus_from_documents_maps_id_and_full_body() -> None:
     assert corpus[0].text == "A lush, sprawling record."
 
 
+def test_musicbrainz_tags_become_metadata_genres_without_review_citations() -> None:
+    group = ReleaseGroup(
+        mbid="rg-tags",
+        title="Album",
+        artist="Artist",
+        tags=("art pop", "Art Pop", "baroque pop", "dream pop"),
+    )
+
+    helper = getattr(pipeline, "genres_from_release_group", None)
+    assert callable(helper)
+    assert [genre.name for genre in helper(group)] == [
+        "Art Pop",
+        "Baroque Pop",
+        "Dream Pop",
+    ]
+    assert all(genre.source_ids == [] for genre in helper(group))
+
+
 def test_group_by_pool_separates_incompatible_licenses() -> None:
     reviews = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
-    wiki = FakeWiki(_WIKI_SECTIONS, _WIKI_TEXT).reception_section(
-        "Norman Fucking Rockwell!"
-    )
+    wiki = FakeWiki(_WIKI_SECTIONS, _WIKI_TEXT).reception_section("Norman Fucking Rockwell!")
     documents: list[ReviewDocument] = [
         cb_document(reviews[0], _RELEASE),
         wiki_document(wiki, _RELEASE, "Norman Fucking Rockwell!"),
@@ -142,4 +154,3 @@ def test_enrich_release_partitions_by_pool_and_never_crosses() -> None:
     assert wikipedia == {"wikipedia-norman-fucking-rockwell-reception"}
     # No summary's claims cite a source from the other pool.
     assert critiquebrainz.isdisjoint(wikipedia)
-

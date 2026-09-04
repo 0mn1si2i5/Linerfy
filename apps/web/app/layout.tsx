@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Linerfy — Hear the context",
-  description: "A lightweight criticism layer for the music already playing.",
+  title: "Linerfy",
+  description: "Review context for the current track.",
 };
 
 export default function RootLayout({

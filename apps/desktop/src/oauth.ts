@@ -36,6 +36,8 @@ export interface PkcePair {
   challenge: string;
 }
 
+export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+
 function base64Url(input: Buffer): string {
   return input.toString("base64url");
 }
@@ -67,8 +69,9 @@ export async function exchangeCodeForSession(
   config: OAuthConfig,
   code: string,
   verifier: string,
+  fetcher: Fetcher = fetch,
 ): Promise<SupabaseSession> {
-  const res = await fetch(
+  const res = await fetcher(
     `${config.url.replace(/\/+$/, "")}/auth/v1/token?grant_type=pkce`,
     {
       method: "POST",
@@ -101,8 +104,9 @@ export async function exchangeCodeForSession(
 export async function refreshSession(
   config: OAuthConfig,
   refreshToken: string,
+  fetcher: Fetcher = fetch,
 ): Promise<SupabaseSession> {
-  const res = await fetch(
+  const res = await fetcher(
     `${config.url.replace(/\/+$/, "")}/auth/v1/token?grant_type=refresh_token`,
     {
       method: "POST",
@@ -227,6 +231,7 @@ export function startCallbackServer(port = 0): Promise<CallbackServer> {
 export async function performOAuthFlow(
   config: OAuthConfig,
   openExternal: (url: string) => Promise<void>,
+  fetcher: Fetcher = fetch,
 ): Promise<SupabaseSession> {
   const { verifier, challenge } = generatePkce();
   const server = await startCallbackServer(config.redirectPort ?? 4862);
@@ -234,7 +239,7 @@ export async function performOAuthFlow(
     const redirectTo = `http://127.0.0.1:${server.port}/callback`;
     await openExternal(authorizeUrl(config, redirectTo, challenge));
     const code = await server.waitForCallback();
-    return await exchangeCodeForSession(config, code, verifier);
+    return await exchangeCodeForSession(config, code, verifier, fetcher);
   } finally {
     server.close();
   }

@@ -44,16 +44,13 @@ class NowPlayingRequest(BaseModel):
         return value
 
     def fingerprint(self) -> str:
-        """A stable dedup key for this request.
+        """A stable release-level dedup key for this request.
 
-        The provider URL (Spotify ``spotify:track:...`` / Apple Music URL) is the
-        most stable identity; when absent we fall back to normalized
-        artist+album so different albums never collide.
+        ``provider_url`` identifies a track, while enrichment and published
+        context are release-level. It therefore cannot participate in this key:
+        every track on one album must resolve to the same enrichment job.
         """
-        if self.provider_url:
-            key = f"{self.provider}:{normalize(self.provider_url)}"
-        else:
-            key = f"{self.provider}:{normalize(self.artist)}|{normalize(self.album)}"
+        key = f"{self.provider}:{normalize(self.artist)}|{normalize(self.album)}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def lookup_key(self) -> dict[str, str]:

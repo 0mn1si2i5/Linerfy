@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -16,8 +17,8 @@ import {
   globalShortcut,
   ipcMain,
   nativeImage,
+  net,
   safeStorage,
-  screen,
   shell,
   Tray,
 } from "electron";
@@ -44,14 +45,15 @@ import { TRAY_ICON_DATA_URL } from "./tray-icon";
 import {
   defaultWindowState,
   loadWindowState,
-  popoverHeight,
   saveWindowState,
-  POPOVER_WIDTH,
   type WindowState,
 } from "./window-state";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
+declare const __LINERFY_BUILD_SUPABASE_URL__: string;
+declare const __LINERFY_BUILD_SUPABASE_PUBLISHABLE_KEY__: string;
+declare const __LINERFY_BUILD_API_URL__: string;
 
 const execFileAsync = promisify(execFile);
 const allowedScripts = new Set([
@@ -62,12 +64,11 @@ const allowedScripts = new Set([
 const runFixedJxa: ScriptRunner = async (script) => {
   if (!allowedScripts.has(script))
     throw new Error("Only bundled automation programs may run");
-  const { stdout } = await execFileAsync("/usr/bin/osascript", [
-    "-l",
-    "JavaScript",
-    "-e",
-    script,
-  ]);
+  const { stdout } = await execFileAsync(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", script],
+    { timeout: 5_000, killSignal: "SIGKILL" },
+  );
   return stdout;
 };
 
@@ -77,6 +78,7 @@ const nowPlaying = createNowPlayingService([
 ]);
 
 const POLL_INTERVAL_MS = 2500;
+const CONTEXT_REQUEST_TIMEOUT_MS = 15_000;
 const TOGGLE_SHORTCUT = "CommandOrControl+Shift+L";
 
 let mainWindow: BrowserWindow | null = null;
@@ -84,6 +86,7 @@ let tray: Tray | null = null;
 let state: WindowState = defaultWindowState();
 let isQuitting = false;
 let pollTimer: NodeJS.Timeout | null = null;
+let nowPlayingPollInFlight = false;
 
 const stateFile = () => `${app.getPath("userData")}/window-state.json`;
 const tokenFile = () => `${app.getPath("userData")}/session-token.json`;
@@ -122,8 +125,10 @@ function loginState(): LoginState {
 }
 
 function oauthConfig() {
-  const url = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+  const url = process.env.SUPABASE_URL || __LINERFY_BUILD_SUPABASE_URL__;
+  const anonKey =
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    __LINERFY_BUILD_SUPABASE_PUBLISHABLE_KEY__;
   if (!url || !anonKey) return null;
   const redirectPort = Number(
     process.env.LINERFY_OAUTH_REDIRECT_PORT ?? "4862",
@@ -155,7 +160,11 @@ async function refreshOrClear(): Promise<SupabaseSession | null> {
     return null;
   }
   try {
-    const refreshed = await refreshSession(config, session.refresh_token);
+    const refreshed = await refreshSession(
+      config,
+      session.refresh_token,
+      net.fetch,
+    );
     tokenStore?.save(JSON.stringify(refreshed));
     return refreshed;
   } catch {
@@ -178,7 +187,7 @@ async function ensureFreshSession(): Promise<SupabaseSession | null> {
 
 // The authenticated API base (e.g. the Vercel deployment). Context fetching is
 // disabled until it and a session are both present.
-const apiUrl = process.env.LINERFY_API_URL;
+const apiUrl = process.env.LINERFY_API_URL || __LINERFY_BUILD_API_URL__;
 
 let contextFetchSeq = 0;
 let lastFetchedTrackKey: string | null = null;
@@ -204,10 +213,12 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
     return;
   }
   const seq = ++contextFetchSeq;
-  sendContext({ status: "loading" });
+  if (lastFetchedTrackKey !== trackKey(track)) {
+    sendContext({ status: "loading" });
+  }
 
   const post = (token: string) =>
-    fetch(`${apiUrl.replace(/\/+$/, "")}/api/context`, {
+    net.fetch(`${apiUrl.replace(/\/+$/, "")}/api/context`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -219,8 +230,8 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
         artist: track.artist,
         album: track.album,
         state: track.state,
-        ...(track.providerUrl ? { providerUrl: track.providerUrl } : {}),
       }),
+      signal: AbortSignal.timeout(CONTEXT_REQUEST_TIMEOUT_MS),
     });
 
   let response: Response;
@@ -300,42 +311,17 @@ function maybeFetchContext(track: NowPlayingTrack | null) {
   void fetchContextForTrack(track);
 }
 
-function popoverSize(): { width: number; height: number } {
-  return {
-    width: POPOVER_WIDTH,
-    height: popoverHeight(screen.getPrimaryDisplay().workArea.height),
-  };
-}
-
 function windowStyle() {
-  if (state.locked) {
-    return {
-      ...popoverSize(),
-      resizable: false,
-      movable: false,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-    };
-  }
   return {
     width: state.width,
     height: state.height,
     ...(state.x !== undefined ? { x: state.x } : {}),
     ...(state.y !== undefined ? { y: state.y } : {}),
-    resizable: true,
-    movable: true,
-    alwaysOnTop: false,
-    skipTaskbar: false,
+    resizable: !state.locked,
+    movable: !state.locked,
+    alwaysOnTop: state.locked,
+    skipTaskbar: state.locked,
   };
-}
-
-function positionPopover(window: BrowserWindow) {
-  if (!state.locked || !tray) return;
-  const trayBounds = tray.getBounds();
-  const { width, height } = popoverSize();
-  const x = Math.round(trayBounds.x + trayBounds.width / 2 - width / 2);
-  const y = Math.round(trayBounds.y + trayBounds.height + 4);
-  window.setBounds({ x, y, width, height });
 }
 
 function loadRenderer(window: BrowserWindow) {
@@ -343,16 +329,12 @@ function loadRenderer(window: BrowserWindow) {
     void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
     void window.loadFile(
-      new URL(
-        `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
-        import.meta.url,
-      ).pathname,
+      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
 }
 
-function captureNormalBounds(window: BrowserWindow) {
-  if (state.locked) return;
+function captureWindowBounds(window: BrowserWindow) {
   const bounds = window.getBounds();
   state = {
     ...state,
@@ -364,13 +346,20 @@ function captureNormalBounds(window: BrowserWindow) {
 }
 
 function sendNowPlaying() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  void nowPlaying.getNowPlaying().then((track) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("now-playing:changed", track);
-    }
-    maybeFetchContext(track);
-  });
+  if (nowPlayingPollInFlight || !mainWindow || mainWindow.isDestroyed()) return;
+  nowPlayingPollInFlight = true;
+  void nowPlaying
+    .getNowPlaying()
+    .then((track) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("now-playing:changed", track);
+      }
+      maybeFetchContext(track);
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      nowPlayingPollInFlight = false;
+    });
 }
 
 function startPolling() {
@@ -387,25 +376,10 @@ function stopPolling() {
 }
 
 async function applyMode(window: BrowserWindow) {
-  captureNormalBounds(window);
-  if (state.locked) {
-    window.setResizable(false);
-    window.setMovable(false);
-    window.setAlwaysOnTop(true);
-    window.setSkipTaskbar(true);
-    positionPopover(window);
-  } else {
-    window.setAlwaysOnTop(false);
-    window.setSkipTaskbar(false);
-    window.setMovable(true);
-    window.setResizable(true);
-    window.setBounds({
-      x: state.x ?? 0,
-      y: state.y ?? 0,
-      width: state.width,
-      height: state.height,
-    });
-  }
+  window.setResizable(!state.locked);
+  window.setMovable(!state.locked);
+  window.setAlwaysOnTop(state.locked);
+  window.setSkipTaskbar(state.locked);
   await saveWindowState(stateFile(), state);
   window.webContents.send("window:state", { locked: state.locked });
 }
@@ -416,17 +390,25 @@ function toggleWindow() {
     mainWindow.hide();
     stopPolling();
   } else {
-    positionPopover(mainWindow);
-    mainWindow.show();
-    mainWindow.focus();
-    startPolling();
+    showWindow();
   }
 }
 
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.show();
+  mainWindow.focus();
+  app.focus({ steal: true });
+  startPolling();
+}
+
 function createWindow() {
-  const preload = new URL("preload.js", import.meta.url).pathname;
+  const preload = path.join(__dirname, "preload.js");
   const window = new BrowserWindow(
-    createWindowOptions(preload, { ...windowStyle(), frame: false }),
+    createWindowOptions(preload, {
+      ...windowStyle(),
+      show: false,
+    }),
   );
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -438,17 +420,18 @@ function createWindow() {
   window.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();
-      captureNormalBounds(window);
+      captureWindowBounds(window);
       void saveWindowState(stateFile(), state);
       stopPolling();
       window.hide();
     }
   });
-  window.on("moved", () => captureNormalBounds(window));
-  window.on("resized", () => captureNormalBounds(window));
+  window.on("moved", () => captureWindowBounds(window));
+  window.on("resized", () => captureWindowBounds(window));
 
-  loadRenderer(window);
   mainWindow = window;
+  window.once("ready-to-show", showWindow);
+  loadRenderer(window);
 }
 
 function createTray() {
@@ -467,6 +450,7 @@ ipcMain.handle("now-playing:get", async () => {
 ipcMain.handle("window:get-state", () => ({ locked: state.locked }));
 
 ipcMain.handle("window:set-locked", async (_event, locked: boolean) => {
+  if (mainWindow) captureWindowBounds(mainWindow);
   state = { ...state, locked };
   if (mainWindow) await applyMode(mainWindow);
 });
@@ -490,8 +474,10 @@ ipcMain.handle("auth:sign-in", async (): Promise<SignInResult> => {
     };
   }
   try {
-    const session = await performOAuthFlow(config, (url) =>
-      shell.openExternal(url),
+    const session = await performOAuthFlow(
+      config,
+      (url) => shell.openExternal(url),
+      net.fetch,
     );
     tokenStore?.save(JSON.stringify(session));
     sendAuthState();
@@ -507,16 +493,21 @@ ipcMain.handle("auth:sign-in", async (): Promise<SignInResult> => {
   }
 });
 
-void app.whenReady().then(async () => {
-  state = await loadWindowState(stateFile());
-  tokenStore = createTokenStore(tokenFile(), safeCrypto);
-  createWindow();
-  createTray();
-  globalShortcut.register(TOGGLE_SHORTCUT, () => toggleWindow());
-  app.on("activate", () => {
-    if (mainWindow && !mainWindow.isVisible()) toggleWindow();
+const isPrimaryInstance = app.requestSingleInstanceLock();
+
+if (!isPrimaryInstance) {
+  app.quit();
+} else {
+  app.on("second-instance", showWindow);
+  void app.whenReady().then(async () => {
+    state = await loadWindowState(stateFile());
+    tokenStore = createTokenStore(tokenFile(), safeCrypto);
+    createTray();
+    createWindow();
+    globalShortcut.register(TOGGLE_SHORTCUT, () => toggleWindow());
+    app.on("activate", showWindow);
   });
-});
+}
 
 app.on("before-quit", () => {
   isQuitting = true;
