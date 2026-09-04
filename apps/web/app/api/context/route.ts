@@ -98,5 +98,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "queue failed" }, { status: 500 });
   }
 
+  // Wake the Python worker immediately after a first insert. pg_net queues the
+  // request asynchronously, so this never waits on the worker's response, and a
+  // failure here is non-fatal: the one-minute cron still recovers the job.
+  try {
+    await supabase.rpc("wake_worker");
+  } catch {
+    // Ignore — the cron compensates for a missed wake.
+  }
+
   return NextResponse.json({ status: "queued", stage: "resolve_entity" });
 }
