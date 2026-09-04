@@ -216,6 +216,7 @@ function DesktopApp() {
       {auth.status === "signed-in" &&
       (context.status === "ready" || context.status === "partial") ? (
         <div className="context">
+          <p className="album-review-note">专辑评价</p>
           <MusicContextCard
             context={context.context}
             showReleaseHeader={false}

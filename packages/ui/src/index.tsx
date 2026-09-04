@@ -1,6 +1,17 @@
 import type { MusicContext } from "@linerfy/domain";
 import type { ReactNode } from "react";
 
+/**
+ * A source's editorial tier, so Wikipedia "Critical reception" is never shown
+ * as a dedicated review site, and community reviews are not confused with media
+ * criticism. Unknown sources are treated as media (the most restrictive tier).
+ */
+export function sourceTierLabel(sourceId: string): string | null {
+  if (sourceId === "wikipedia") return "背景资料";
+  if (sourceId === "critiquebrainz") return "社区评论";
+  return null;
+}
+
 export function LinerfyMark() {
   return (
     <span className="linerfy-mark" aria-label="Linerfy">
@@ -124,7 +135,11 @@ export function MusicContextCard({
               <article className="source-card" key={source.id}>
                 <div className="source-meta">
                   <strong>{source.publication}</strong>
-                  {source.score ? (
+                  {sourceTierLabel(source.id) ? (
+                    <span className="source-tier">
+                      {sourceTierLabel(source.id)}
+                    </span>
+                  ) : source.score ? (
                     <span>
                       {source.score.value}/{source.score.scale}
                     </span>
