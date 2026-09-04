@@ -8,6 +8,7 @@
     "dev": "electron-forge start",
     "lint": "tsc --noEmit",
     "package": "electron-forge package",
+    "smoke": "electron scripts/renderer-smoke.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
