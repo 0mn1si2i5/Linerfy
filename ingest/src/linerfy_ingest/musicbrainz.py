@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
-from .entities import EntityMatchResult, ReleaseGroup
+from .entities import EntityMatchResult, MusicBrainzTag, ReleaseGroup
 
 _MB_BASE = "https://musicbrainz.org/ws/2"
 _CAA_BASE = "https://coverartarchive.org"
@@ -106,7 +106,10 @@ class MusicBrainzAdapter:
         url = f"{_MB_BASE}/release-group/{mbid}?inc=tags+ratings+artist-credits&fmt=json"
         payload = self._get_json(url)
         rating = payload.get("rating", {}) or {}
-        tags = tuple(item["name"] for item in payload.get("tags", []))
+        tags = tuple(
+            MusicBrainzTag(name=item["name"], count=item.get("count", 0))
+            for item in payload.get("tags", [])
+        )
         return ReleaseGroup(
             mbid=mbid,
             title=payload.get("title", ""),

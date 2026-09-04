@@ -56,6 +56,14 @@ COVER_ART_POLICY = MetadataSourcePolicy(
 
 
 @dataclass(frozen=True)
+class MusicBrainzTag:
+    """A user-supplied MusicBrainz tag and its vote count (relevance weight)."""
+
+    name: str
+    count: int = 0
+
+
+@dataclass(frozen=True)
 class ReleaseGroup:
     """A MusicBrainz release group with its metadata."""
 
@@ -64,7 +72,7 @@ class ReleaseGroup:
     artist: str
     score: int | None = None
     first_release_date: str | None = None
-    tags: tuple[str, ...] = ()
+    tags: tuple[MusicBrainzTag, ...] = ()
     rating: float | None = None
     rating_votes: int = 0
     artwork_url: str | None = None

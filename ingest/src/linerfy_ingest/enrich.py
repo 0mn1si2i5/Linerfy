@@ -7,6 +7,7 @@ maps them to a summarizer corpus, and produces a provenance-checked summary.
 
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .critiquebrainz import CRITIQUEBRAINZ_SOURCE, CritiqueBrainzAdapter
@@ -48,18 +49,63 @@ def group_by_pool(
     return grouped
 
 
+# Tags that describe provenance (language, region, era, format, chart position)
+# rather than a musical style. Matched casefolded against the normalized name.
+# Deliberately small: a conservative cleanup, not a global genre ontology.
+_NON_GENRE_TAGS = frozenset({
+    # languages
+    "english", "german", "french", "spanish", "italian", "portuguese",
+    "japanese", "korean", "chinese", "russian", "dutch", "swedish",
+    "norwegian", "danish", "finnish", "polish", "turkish", "arabic",
+    "hindi", "ukrainian",
+    # countries / nationalities
+    "united states", "usa", "us", "uk", "united kingdom", "canada",
+    "australia", "germany", "france", "italy", "japan", "britain",
+    "british", "american", "america", "ireland", "irish", "australian",
+    "canadian", "europe",
+    # release formats / versions
+    "album", "single", "ep", "compilation", "mixtape", "remix",
+})
+
+# Year / decade tags ("2019", "2010s", "80s").
+_YEAR_TAG = re.compile(r"^\d{4}$|^\d{4}s$|^\d{2}s$")
+# Chart-position tags ("1-4 Wochen", "1–4 weeks"); digits on both sides of the
+# dash so a real genre like "2-step" is never mistaken for a chart range.
+_CHART_TAG = re.compile(r"^\d+\s*[-–—]\s*\d+")
+
+
+def _is_non_genre(name: str) -> bool:
+    """True when a normalized tag name is provenance, not a musical style."""
+    if name.casefold() in _NON_GENRE_TAGS:
+        return True
+    return bool(_YEAR_TAG.match(name) or _CHART_TAG.match(name))
+
+
+_MAX_GENRES = 5
+
+
 def genres_from_release_group(release_group: ReleaseGroup) -> list[Genre]:
-    """Return a short, deduplicated display list from MusicBrainz tags."""
+    """Return a short, deduplicated genre list from MusicBrainz tags.
+
+    Tags are user-supplied and often carry provenance (language, region, era,
+    format, chart position) rather than a style. Only the most-voted tags that
+    are plausibly genres survive, ordered by vote count and capped at a handful,
+    so a low-confidence tag never displaces a stronger one and provenance tags
+    are never shown as genres.
+    """
+    ranked = sorted(release_group.tags, key=lambda tag: tag.count, reverse=True)
     genres: list[Genre] = []
     seen: set[str] = set()
-    for raw_tag in release_group.tags:
-        tag = " ".join(raw_tag.split())
-        key = tag.casefold()
-        if not tag or key in seen:
+    for tag in ranked:
+        name = " ".join(tag.name.split())
+        key = name.casefold()
+        if not name or key in seen or _is_non_genre(name):
             continue
         seen.add(key)
-        genres.append(Genre(name=tag.title() if tag.islower() else tag, source_ids=[]))
-        if len(genres) == 6:
+        genres.append(
+            Genre(name=name.title() if name.islower() else name, source_ids=[])
+        )
+        if len(genres) == _MAX_GENRES:
             break
     return genres
 

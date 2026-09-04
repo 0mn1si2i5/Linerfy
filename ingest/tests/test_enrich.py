@@ -10,15 +10,15 @@ from __future__ import annotations
 import json
 import re
 
-import linerfy_ingest.pipeline as pipeline
 from linerfy_ingest.critiquebrainz import CritiqueBrainzAdapter
 from linerfy_ingest.critiquebrainz import to_document as cb_document
 from linerfy_ingest.enrich import (
     corpus_from_documents,
     enrich_release,
+    genres_from_release_group,
     group_by_pool,
 )
-from linerfy_ingest.entities import ReleaseGroup
+from linerfy_ingest.entities import MusicBrainzTag, ReleaseGroup
 from linerfy_ingest.models import ReleaseEntity, ReviewDocument
 from linerfy_ingest.providers import ChatResult
 from linerfy_ingest.wikipedia import WikipediaAdapter
@@ -102,17 +102,42 @@ def test_musicbrainz_tags_become_metadata_genres_without_review_citations() -> N
         mbid="rg-tags",
         title="Album",
         artist="Artist",
-        tags=("art pop", "Art Pop", "baroque pop", "dream pop"),
+        tags=(
+            MusicBrainzTag(name="art pop", count=10),
+            MusicBrainzTag(name="Art Pop", count=9),
+            MusicBrainzTag(name="baroque pop", count=8),
+            MusicBrainzTag(name="dream pop", count=7),
+        ),
     )
 
-    helper = getattr(pipeline, "genres_from_release_group", None)
-    assert callable(helper)
-    assert [genre.name for genre in helper(group)] == [
+    genres = genres_from_release_group(group)
+    assert [genre.name for genre in genres] == [
         "Art Pop",
         "Baroque Pop",
         "Dream Pop",
     ]
-    assert all(genre.source_ids == [] for genre in helper(group))
+    assert all(genre.source_ids == [] for genre in genres)
+
+
+def test_musicbrainz_tags_skip_language_region_era_and_chart_tags() -> None:
+    group = ReleaseGroup(
+        mbid="rg-filter",
+        title="Album",
+        artist="Artist",
+        tags=(
+            MusicBrainzTag(name="English", count=50),
+            MusicBrainzTag(name="1–4 Wochen", count=40),
+            MusicBrainzTag(name="2010s", count=30),
+            MusicBrainzTag(name="United States", count=20),
+            MusicBrainzTag(name="art pop", count=10),
+            MusicBrainzTag(name="baroque pop", count=8),
+        ),
+    )
+
+    assert [genre.name for genre in genres_from_release_group(group)] == [
+        "Art Pop",
+        "Baroque Pop",
+    ]
 
 
 def test_group_by_pool_separates_incompatible_licenses() -> None:

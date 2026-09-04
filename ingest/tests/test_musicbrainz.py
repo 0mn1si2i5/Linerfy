@@ -8,6 +8,7 @@ import urllib.error
 import pytest
 
 import linerfy_ingest.musicbrainz as musicbrainz_module
+from linerfy_ingest.entities import MusicBrainzTag
 from linerfy_ingest.musicbrainz import (
     MATCH_THRESHOLD,
     MusicBrainzAdapter,
@@ -38,7 +39,7 @@ _LOOKUP_PAYLOAD = {
     "title": "Norman Fucking Rockwell!",
     "first-release-date": "2019-08-30",
     "artist-credit": [{"name": "Lana Del Rey", "joinphrase": ""}],
-    "tags": [{"name": "art pop"}, {"name": "baroque pop"}],
+    "tags": [{"name": "art pop", "count": 12}, {"name": "baroque pop", "count": 8}],
     "rating": {"value": 4.2, "votes-count": 87},
 }
 
@@ -74,7 +75,10 @@ def test_search_parses_release_groups() -> None:
 
 def test_lookup_enriches_tags_and_rating() -> None:
     group = _fake().get_release_group("rg-nfr")
-    assert group.tags == ("art pop", "baroque pop")
+    assert group.tags == (
+        MusicBrainzTag(name="art pop", count=12),
+        MusicBrainzTag(name="baroque pop", count=8),
+    )
     assert group.rating == 4.2
     assert group.rating_votes == 87
     assert group.artwork_url == "https://coverartarchive.org/release-group/rg-nfr/front"
