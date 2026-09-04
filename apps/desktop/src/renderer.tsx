@@ -5,7 +5,11 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { LoginState } from "./auth-state";
-import { contextStatusLabel, type ContextState } from "./context-state";
+import {
+  contextStatusLabel,
+  stageLabel,
+  type ContextState,
+} from "./context-state";
 import "./renderer.css";
 
 function formatTime(ms: number): string {
@@ -218,7 +222,7 @@ function DesktopApp() {
           />
           {context.status === "partial" ? (
             <p className="context-progress" aria-live="polite">
-              正在补齐乐评…
+              {stageLabel(context.stage)}
             </p>
           ) : null}
         </div>

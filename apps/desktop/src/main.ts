@@ -307,10 +307,15 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
       status: "partial",
       context: body.context,
       stage: body.stage ?? "",
+      paused: body.paused,
     });
   } else if (body.status === "queued" || body.status === "running") {
     pendingContext = true;
-    sendContext({ status: body.status, stage: body.stage ?? "" });
+    sendContext({
+      status: body.status,
+      stage: body.stage ?? "",
+      paused: body.paused,
+    });
   } else {
     pendingContext = false;
     sendContext({ status: body.status });

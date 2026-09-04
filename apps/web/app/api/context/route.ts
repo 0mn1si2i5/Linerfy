@@ -62,6 +62,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "query failed" }, { status: 500 });
   }
 
+  // Surface the global model-generation pause (budget cap / operator) so an
+  // in-progress request can say "服务暂停" instead of appearing to spin.
+  const { data: pausedFlag } = await supabase
+    .from("service_flags")
+    .select("value")
+    .eq("key", "model_generation_paused")
+    .maybeSingle();
+  const paused = pausedFlag?.value === "true";
+
   if (!job) {
     // No job: either the release was already completed (cached) or it has never
     // been enqueued.
@@ -101,7 +110,11 @@ export async function POST(request: NextRequest) {
       // Ignore — the cron compensates for a missed wake.
     }
 
-    return NextResponse.json({ status: "queued", stage: "resolve_entity" });
+    return NextResponse.json({
+      status: "queued",
+      stage: "resolve_entity",
+      paused,
+    });
   }
 
   if (job.state === "ready") {
@@ -134,8 +147,9 @@ export async function POST(request: NextRequest) {
       status: "partial",
       stage: job.stage,
       context: result.context,
+      paused,
     });
   }
 
-  return NextResponse.json({ status: job.state, stage: job.stage });
+  return NextResponse.json({ status: job.state, stage: job.stage, paused });
 }
