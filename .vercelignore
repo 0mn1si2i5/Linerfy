@@ -1,7 +1,13 @@
-*
-!ingest
-!ingest/**
-ingest/.venv/**
-ingest/**/__pycache__/**
-ingest/.pytest_cache/**
-ingest/.ruff_cache/**
+# Local caches, virtualenvs, and build output are never part of a deployment.
+# Keep this to genuinely-unwanted paths only: both the Web project (root
+# directory `apps/web`) and the Worker project (root directory `ingest`) deploy
+# from this repository, and a broad ignore here would silently drop the files a
+# project needs (e.g. `apps/web` and the workspace packages for the Next.js app).
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.next/
+**/.vite/
+**/out/
+*.pyc
