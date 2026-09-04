@@ -266,6 +266,8 @@ describe("assembleMusicContext", () => {
     expect(context.release.year).toBe(2019);
     expect(context.sources).toHaveLength(2);
     expect(context.sources[0]?.publication).toBe("Pitchfork");
+    expect(context.sources[0]?.providerId).toBe("pitchfork");
+    expect(context.sources[0]?.id).toBe("pitchfork-nfr");
     expect(context.genres.map((g) => g.name)).toEqual([
       "Singer-Songwriter",
       "Psychedelic Pop",
@@ -416,6 +418,11 @@ describe("assembleMusicContext", () => {
       "guardian",
       "wikipedia",
     ]);
+    // The Wikipedia source is keyed by its provider slug, not its document
+    // slug — the exact failure the providerId contract guards against.
+    const wikipedia = context.sources.find((s) => s.providerId === "wikipedia");
+    expect(wikipedia?.id).toBe("wikipedia-nfr");
+    expect(wikipedia?.providerId).toBe("wikipedia");
     expect(context.consensusBlocks.map((b) => b.licensePool)).toEqual([
       "proprietary",
       "cc-by-sa-4.0",

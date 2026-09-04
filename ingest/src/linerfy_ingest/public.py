@@ -45,6 +45,7 @@ def to_public(context: IngestedContext) -> dict:
         _omit_none(
             {
                 "id": document.id,
+                "providerId": document.source_id,
                 "publication": _publication_name(context, document.source_id),
                 "author": document.author,
                 "title": document.title,

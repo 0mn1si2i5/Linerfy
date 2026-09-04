@@ -21,7 +21,13 @@ export const recordingSchema = z.object({
 });
 
 export const reviewSourceSchema = z.object({
+  // Document identity: a stable slug per stored review document (e.g.
+  // `wikipedia-<release-id>-reception`). Never a provider identifier.
   id: z.string().min(1),
+  // Source identity: the stable provider slug (e.g. `wikipedia`), filled from
+  // `review_sources.slug` at the catalog boundary. The UI keys tier labels on
+  // this, never on `id` or the publication display name.
+  providerId: z.string().min(1),
   publication: z.string().min(1),
   author: z.string().min(1).optional(),
   title: z.string().min(1),

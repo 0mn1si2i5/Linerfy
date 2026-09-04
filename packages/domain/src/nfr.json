@@ -24,6 +24,7 @@
   "sources": [
     {
       "id": "pitchfork-nfr",
+      "providerId": "pitchfork",
       "publication": "Pitchfork",
       "author": "Jenn Pelly",
       "title": "Norman Fucking Rockwell!",
@@ -36,6 +37,7 @@
     },
     {
       "id": "guardian-nfr",
+      "providerId": "guardian",
       "publication": "The Guardian",
       "author": "Alexis Petridis",
       "title": "Norman Fucking Rockwell! review",

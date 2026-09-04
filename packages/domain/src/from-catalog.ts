@@ -140,6 +140,7 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
     .map((d) => {
       const source = {
         id: d.slug,
+        providerId: sourceByUuid.get(d.source_id)?.slug ?? "",
         publication: sourceByUuid.get(d.source_id)?.publication ?? "",
         title: d.title,
         url: d.source_url,

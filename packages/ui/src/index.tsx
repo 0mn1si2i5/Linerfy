@@ -2,13 +2,15 @@ import type { MusicContext } from "@linerfy/domain";
 import type { ReactNode } from "react";
 
 /**
- * A source's editorial tier, so Wikipedia "Critical reception" is never shown
- * as a dedicated review site, and community reviews are not confused with media
- * criticism. Unknown sources are treated as media (the most restrictive tier).
+ * A source's editorial tier, keyed on its stable provider slug — never the
+ * document slug, and never the publication display name. Wikipedia "Critical
+ * reception" is 背景资料 (background, not a review site) and CritiqueBrainz is
+ * 社区评论 (community reviews, not media criticism). Unknown providers are
+ * treated as media and show their score instead.
  */
-export function sourceTierLabel(sourceId: string): string | null {
-  if (sourceId === "wikipedia") return "背景资料";
-  if (sourceId === "critiquebrainz") return "社区评论";
+export function sourceTierLabel(providerId: string): string | null {
+  if (providerId === "wikipedia") return "背景资料";
+  if (providerId === "critiquebrainz") return "社区评论";
   return null;
 }
 
@@ -111,7 +113,14 @@ export function MusicContextCard({
           <div className="source-summary-grid">
             {context.sourceSummaries.map((summary) => (
               <article className="source-summary" key={summary.source.id}>
-                <strong>{summary.source.publication}</strong>
+                <div className="source-meta">
+                  <strong>{summary.source.publication}</strong>
+                  {sourceTierLabel(summary.source.id) ? (
+                    <span className="source-tier">
+                      {sourceTierLabel(summary.source.id)}
+                    </span>
+                  ) : null}
+                </div>
                 <ul className="claim-list">
                   {summary.claims.map((claim) => (
                     <li className="claim-item" key={claim.id}>
@@ -135,9 +144,9 @@ export function MusicContextCard({
               <article className="source-card" key={source.id}>
                 <div className="source-meta">
                   <strong>{source.publication}</strong>
-                  {sourceTierLabel(source.id) ? (
+                  {sourceTierLabel(source.providerId) ? (
                     <span className="source-tier">
-                      {sourceTierLabel(source.id)}
+                      {sourceTierLabel(source.providerId)}
                     </span>
                   ) : source.score ? (
                     <span>
