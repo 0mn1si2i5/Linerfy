@@ -200,6 +200,12 @@ button {
   padding: 16px;
 }
 
+.context-progress {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .context-card {
   display: grid;
   gap: 16px;

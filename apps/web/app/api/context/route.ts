@@ -13,7 +13,9 @@ import { serviceClient } from "../../../lib/supabase";
 export const dynamic = "force-dynamic";
 
 // The authenticated online entry point: report the current track and receive
-// its enrichment state (queued/running/ready/…), or the full context when ready.
+// its enrichment state (queued/running/partial/ready/unavailable/ambiguous/
+// failed). `partial` carries the context that is safe to show so far plus the
+// current stage, and signals the client to keep polling.
 export async function POST(request: NextRequest) {
   const token = bearerToken(request.headers.get("authorization"));
   if (!token) {
@@ -45,17 +47,12 @@ export async function POST(request: NextRequest) {
   }
 
   const slug = releaseSlug(parsed.data.artist, parsed.data.album);
-  const existing = await getContextBySlug(slug);
-  if (existing.status === "ok") {
-    return NextResponse.json({ status: "ready", context: existing.context });
-  }
-  if (existing.status === "query-failed" || existing.status === "invalid") {
-    return NextResponse.json({ error: "context read failed" }, { status: 500 });
-  }
-
   const fingerprint = requestFingerprint(parsed.data);
   const supabase = serviceClient();
 
+  // `ready` is determined by the job's state, never by the mere presence of
+  // catalog rows: an in-progress job with partial data must stay `partial` so
+  // the client keeps polling until it actually finishes.
   const { data: job, error: jobError } = await supabase
     .from("enrichment_jobs")
     .select("state, stage, resolution_status")
@@ -65,47 +62,80 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "query failed" }, { status: 500 });
   }
 
-  if (job) {
-    if (job.state === "ready") {
-      const result = await getContextBySlug(slug);
-      if (result.status === "ok") {
-        return NextResponse.json({ status: "ready", context: result.context });
-      }
-      // The job is marked ready but its context cannot be assembled — surface a
-      // real failure rather than a bare `ready` the client would misread as
-      // carrying a context.
-      return NextResponse.json({ status: "failed", stage: job.stage });
+  if (!job) {
+    // No job: either the release was already completed (cached) or it has never
+    // been enqueued.
+    const existing = await getContextBySlug(slug);
+    if (existing.status === "ok") {
+      return NextResponse.json({ status: "ready", context: existing.context });
     }
-    // An entity that matched more than one release is a distinct, recoverable
-    // state — never collapse it into `unavailable`.
-    if (job.state === "unavailable" && job.resolution_status === "ambiguous") {
-      return NextResponse.json({ status: "ambiguous" });
+    if (existing.status === "query-failed" || existing.status === "invalid") {
+      return NextResponse.json(
+        { error: "context read failed" },
+        { status: 500 },
+      );
     }
+
+    const { error: insertError } = await supabase
+      .from("enrichment_jobs")
+      .upsert(
+        {
+          entity_id: fingerprint,
+          entity_kind: "release",
+          payload: toIngestPayload(parsed.data),
+          stage: "resolve_entity",
+          state: "queued",
+        },
+        { onConflict: "entity_kind,entity_id", ignoreDuplicates: true },
+      );
+    if (insertError) {
+      return NextResponse.json({ error: "queue failed" }, { status: 500 });
+    }
+
+    // Wake the Python worker immediately after a first insert. pg_net queues
+    // the request asynchronously, so this never waits on the worker's response,
+    // and a failure here is non-fatal: the one-minute cron still recovers.
+    try {
+      await supabase.rpc("wake_worker");
+    } catch {
+      // Ignore — the cron compensates for a missed wake.
+    }
+
+    return NextResponse.json({ status: "queued", stage: "resolve_entity" });
+  }
+
+  if (job.state === "ready") {
+    const result = await getContextBySlug(slug);
+    if (result.status === "ok") {
+      return NextResponse.json({ status: "ready", context: result.context });
+    }
+    // The job is marked ready but its context cannot be assembled — surface a
+    // real failure rather than a bare `ready` the client would misread as
+    // carrying a context.
+    return NextResponse.json({ status: "failed", stage: job.stage });
+  }
+
+  // An entity that matched more than one release is a distinct, recoverable
+  // state — never collapse it into `unavailable`.
+  if (job.state === "unavailable" && job.resolution_status === "ambiguous") {
+    return NextResponse.json({ status: "ambiguous" });
+  }
+
+  if (job.state === "unavailable" || job.state === "failed") {
     return NextResponse.json({ status: job.state, stage: job.stage });
   }
 
-  const { error: insertError } = await supabase.from("enrichment_jobs").upsert(
-    {
-      entity_id: fingerprint,
-      entity_kind: "release",
-      payload: toIngestPayload(parsed.data),
-      stage: "resolve_entity",
-      state: "queued",
-    },
-    { onConflict: "entity_kind,entity_id", ignoreDuplicates: true },
-  );
-  if (insertError) {
-    return NextResponse.json({ error: "queue failed" }, { status: 500 });
+  // In-progress (queued/running): surface whatever partial context is already
+  // safe to publish so the client shows genres, ratings, excerpts, or summaries
+  // while it keeps polling.
+  const result = await getContextBySlug(slug);
+  if (result.status === "ok") {
+    return NextResponse.json({
+      status: "partial",
+      stage: job.stage,
+      context: result.context,
+    });
   }
 
-  // Wake the Python worker immediately after a first insert. pg_net queues the
-  // request asynchronously, so this never waits on the worker's response, and a
-  // failure here is non-fatal: the one-minute cron still recovers the job.
-  try {
-    await supabase.rpc("wake_worker");
-  } catch {
-    // Ignore — the cron compensates for a missed wake.
-  }
-
-  return NextResponse.json({ status: "queued", stage: "resolve_entity" });
+  return NextResponse.json({ status: job.state, stage: job.stage });
 }

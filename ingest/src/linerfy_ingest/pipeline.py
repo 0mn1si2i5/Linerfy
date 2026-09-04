@@ -14,9 +14,9 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .critiquebrainz import CRITIQUEBRAINZ_SOURCE, CritiqueBrainzAdapter
+from .critiquebrainz import CritiqueBrainzAdapter
 from .db import connect, seed
-from .enrich import build_documents, corpus_from_documents, genres_from_release_group
+from .enrich import corpus_from_documents, fetch_documents_parallel, genres_from_release_group
 from .jobs import (
     EnrichmentJob,
     JobStore,
@@ -30,7 +30,6 @@ from .models import (
     ArtistEntity,
     IngestedContext,
     ReleaseEntity,
-    ReviewSource,
     license_pool,
 )
 from .musicbrainz import MusicBrainzAdapter, resolve_release_group
@@ -44,7 +43,7 @@ from .summarize import (
     read_stored_documents,
     summarize,
 )
-from .wikipedia import WIKIPEDIA_SOURCE, WikipediaAdapter
+from .wikipedia import WikipediaAdapter
 
 
 @dataclass
@@ -112,27 +111,43 @@ def _fetch_sources(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> boo
     release_group = deps.musicbrainz.get_release_group(mbid)
     release = _release_for(request, release_group)
     artist = ArtistEntity(id=release.artist_id, name=request.artist)
-    documents = build_documents(
-        release_group, release, release.title, deps.critiquebrainz, deps.wikipedia
+    genres = genres_from_release_group(release_group)
+
+    # Persist the MusicBrainz entity and genres immediately, before the slower
+    # source fetches, so title/year/genres show as early as possible.
+    entity = IngestedContext(
+        release=release, artist=artist, sources=[], review_documents=[], genres=genres
     )
-    source_ids = {document.source_id for document in documents}
-    sources: list[ReviewSource] = [
-        source for source in (CRITIQUEBRAINZ_SOURCE, WIKIPEDIA_SOURCE) if source.id in source_ids
-    ]
-    context = IngestedContext(
-        release=release,
-        artist=artist,
-        sources=sources,
-        review_documents=documents,
-        genres=genres_from_release_group(release_group),
-    )
-    # One transaction: verify the active lease, seed the corpus, and record the
-    # corpus hash together. An expired worker can neither write review documents
-    # nor record the corpus it fetched.
     with connect(autocommit=False) as conn:
         assert_active_lease(conn, job.id, lease_id)
-        seed(conn, context)
-        record_corpus_hash(conn, job.id, lease_id, corpus_hash(corpus_from_documents(documents)))
+        seed(conn, entity)
+        conn.commit()
+
+    # Fetch CritiqueBrainz and Wikipedia in parallel; persist each source's
+    # documents as its request completes, so a fast source is not held up by a
+    # slow one. Every write re-checks the active lease, so an expired worker can
+    # neither overwrite review documents nor record the corpus it fetched.
+    all_documents = []
+    for source, documents in fetch_documents_parallel(
+        release_group, release, release.title, deps.critiquebrainz, deps.wikipedia
+    ):
+        if not documents:
+            continue
+        all_documents.extend(documents)
+        partial = IngestedContext(
+            release=release, artist=artist, sources=[source], review_documents=documents
+        )
+        with connect(autocommit=False) as conn:
+            assert_active_lease(conn, job.id, lease_id)
+            seed(conn, partial)
+            conn.commit()
+
+    # Record the corpus hash once every document is in.
+    with connect(autocommit=False) as conn:
+        assert_active_lease(conn, job.id, lease_id)
+        record_corpus_hash(
+            conn, job.id, lease_id, corpus_hash(corpus_from_documents(all_documents))
+        )
         conn.commit()
     return True
 

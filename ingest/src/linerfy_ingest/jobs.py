@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import traceback
 import uuid
 from contextlib import suppress
@@ -198,12 +199,15 @@ def run_job(
     if handler is None:
         _fail(store, job.id, lease_id, f"no handler for stage {job.stage}")
         return
+    started = time.monotonic()
     try:
         advance = handler(job, lease_id)
     except JobUnavailable:
+        _log_stage(job, started, "unavailable")
         _commit(store, job.id, lease_id, stage=None, state="unavailable")
         return
     except StaleLease:
+        _log_stage(job, started, "stale")
         return  # another worker took over this job; do nothing
     except Exception as exc:  # the job boundary absorbs stage errors for retry
         # Log only job / stage / error category / correlation id. The full
@@ -213,10 +217,13 @@ def run_job(
             f"job {job.entity_id} stage {job.stage} error {type(exc).__name__}",
             file=sys.stderr,
         )
+        _log_stage(job, started, "failed")
         _fail(store, job.id, lease_id, error_label(exc))
         return
     if not advance:
+        _log_stage(job, started, "requeued")
         return  # the handler re-queued itself; do not advance again
+    _log_stage(job, started, "advanced")
     following = next_stage(job.stage)
     _commit(
         store,
@@ -224,6 +231,19 @@ def run_job(
         lease_id,
         stage=following,
         state="ready" if following is None else "queued",
+    )
+
+
+def _log_stage(job: EnrichmentJob, started: float, result: str) -> None:
+    """Emit one stage-timing line: stage, elapsed ms, job id, result category.
+
+    Deliberately no body, prompt, token, or secret — only the correlation ids and
+    a coarse outcome, so a stage's cost is observable without leaking content.
+    """
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    print(
+        f"job {job.id} stage {job.stage} result {result} ms {elapsed_ms}",
+        file=sys.stderr,
     )
 
 

@@ -290,6 +290,15 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
   if (body.status === "ready") {
     pendingContext = false;
     sendContext({ status: "ready", context: body.context });
+  } else if (body.status === "partial") {
+    // Partial content is safe to show now, but the job has not finished: keep
+    // polling until `ready` or a terminal state arrives.
+    pendingContext = true;
+    sendContext({
+      status: "partial",
+      context: body.context,
+      stage: body.stage ?? "",
+    });
   } else if (body.status === "queued" || body.status === "running") {
     pendingContext = true;
     sendContext({ status: body.status, stage: body.stage ?? "" });

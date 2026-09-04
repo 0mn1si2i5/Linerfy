@@ -149,6 +149,11 @@ export const musicContextSchema = z
  */
 export const contextApiResponseSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ready"), context: musicContextSchema }),
+  z.object({
+    status: z.literal("partial"),
+    stage: z.string().optional(),
+    context: musicContextSchema,
+  }),
   z.object({ status: z.literal("queued"), stage: z.string().optional() }),
   z.object({ status: z.literal("running"), stage: z.string().optional() }),
   z.object({ status: z.literal("unavailable") }),

@@ -7,12 +7,14 @@ maps them to a summarizer corpus, and produces a provenance-checked summary.
 
 from __future__ import annotations
 
-from .critiquebrainz import CritiqueBrainzAdapter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .critiquebrainz import CRITIQUEBRAINZ_SOURCE, CritiqueBrainzAdapter
 from .critiquebrainz import to_document as cb_document
 from .entities import ReleaseGroup
-from .models import Genre, ReleaseEntity, ReviewDocument, Summary, license_pool
+from .models import Genre, ReleaseEntity, ReviewDocument, ReviewSource, Summary, license_pool
 from .summarize import CorpusDocument, summarize
-from .wikipedia import WikipediaAdapter, normalize_article_title
+from .wikipedia import WIKIPEDIA_SOURCE, WikipediaAdapter, normalize_article_title
 from .wikipedia import to_document as wiki_document
 
 
@@ -78,6 +80,36 @@ def build_documents(
     if reception is not None:
         documents.append(wiki_document(reception, release, article_title))
     return documents
+
+
+def fetch_documents_parallel(
+    release_group: ReleaseGroup,
+    release: ReleaseEntity,
+    article_title: str,
+    critiquebrainz: CritiqueBrainzAdapter,
+    wikipedia: WikipediaAdapter,
+) -> list[tuple[ReviewSource, list[ReviewDocument]]]:
+    """Fetch CritiqueBrainz and Wikipedia in parallel.
+
+    Returns one ``(source, documents)`` pair per source, in completion order, so
+    the caller can persist a fast source's documents without waiting for the
+    slower one. The two adapters only do network I/O here, so threads are safe.
+    """
+    article_title = normalize_article_title(article_title)
+
+    def fetch_cb() -> tuple[ReviewSource, list[ReviewDocument]]:
+        reviews = critiquebrainz.search_reviews(release_group.mbid)
+        return CRITIQUEBRAINZ_SOURCE, [cb_document(r, release) for r in reviews]
+
+    def fetch_wiki() -> tuple[ReviewSource, list[ReviewDocument]]:
+        reception = wikipedia.reception_section(article_title, artist=release_group.artist)
+        if reception is None:
+            return WIKIPEDIA_SOURCE, []
+        return WIKIPEDIA_SOURCE, [wiki_document(reception, release, article_title)]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(fetch_cb), pool.submit(fetch_wiki)]
+        return [future.result() for future in as_completed(futures)]
 
 
 def enrich_release(

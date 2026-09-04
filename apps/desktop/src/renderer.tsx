@@ -76,7 +76,9 @@ function DesktopApp() {
 
   const playingTrack = view.kind === "playing" ? view.track : null;
   const releaseYear =
-    context.status === "ready" ? context.context.release.year : null;
+    context.status === "ready" || context.status === "partial"
+      ? context.context.release.year
+      : null;
   const contextLabel = playingTrack
     ? contextStatusLabel(auth.status, context)
     : null;
@@ -173,12 +175,18 @@ function DesktopApp() {
         </>
       ) : null}
 
-      {auth.status === "signed-in" && context.status === "ready" ? (
+      {auth.status === "signed-in" &&
+      (context.status === "ready" || context.status === "partial") ? (
         <div className="context">
           <MusicContextCard
             context={context.context}
             showReleaseHeader={false}
           />
+          {context.status === "partial" ? (
+            <p className="context-progress" aria-live="polite">
+              正在补齐乐评…
+            </p>
+          ) : null}
         </div>
       ) : contextLabel ? (
         <p
