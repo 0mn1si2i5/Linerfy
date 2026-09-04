@@ -30,7 +30,12 @@ const appleMusicTrack = {
 } satisfies NowPlayingTrack;
 
 function provider(track: NowPlayingTrack | null) {
-  return { getNowPlaying: vi.fn(async () => track) };
+  return {
+    providerName: track?.provider ?? "spotify",
+    getNowPlaying: vi.fn(async () => track),
+    control: vi.fn(async () => {}),
+    seek: vi.fn(async () => {}),
+  };
 }
 
 describe("now-playing providers", () => {
@@ -81,7 +86,10 @@ describe("now-playing providers", () => {
 
   it("tolerates an unavailable provider", async () => {
     const unavailable = {
+      providerName: "spotify" as const,
       getNowPlaying: vi.fn(async () => Promise.reject(new Error("closed"))),
+      control: vi.fn(async () => {}),
+      seek: vi.fn(async () => {}),
     };
     const active = provider(spotifyTrack);
 

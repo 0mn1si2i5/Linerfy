@@ -13,6 +13,10 @@ export interface LinerfyDesktopBridge {
   onNowPlayingChanged(
     callback: (track: NowPlayingTrack | null) => void,
   ): () => void;
+  previous(): Promise<void>;
+  togglePlayback(): Promise<void>;
+  next(): Promise<void>;
+  seekTo(positionMs: number): Promise<void>;
   getWindowState(): Promise<WindowLockState>;
   setWindowLocked(locked: boolean): Promise<void>;
   onWindowStateChanged(callback: (state: WindowLockState) => void): () => void;
@@ -34,6 +38,13 @@ contextBridge.exposeInMainWorld("linerfy", {
     ipcRenderer.on("now-playing:changed", listener);
     return () => ipcRenderer.removeListener("now-playing:changed", listener);
   },
+  previous: () =>
+    ipcRenderer.invoke("playback:control", "previous") as Promise<void>,
+  togglePlayback: () =>
+    ipcRenderer.invoke("playback:control", "toggle") as Promise<void>,
+  next: () => ipcRenderer.invoke("playback:control", "next") as Promise<void>,
+  seekTo: (positionMs: number) =>
+    ipcRenderer.invoke("playback:seek", positionMs) as Promise<void>,
   getWindowState: () =>
     ipcRenderer.invoke("window:get-state") as Promise<WindowLockState>,
   setWindowLocked: (locked: boolean) =>

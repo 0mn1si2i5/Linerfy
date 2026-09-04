@@ -1,11 +1,17 @@
 import { MusicContextCard } from "@linerfy/ui";
 import type { NowPlayingTrack } from "@linerfy/now-playing";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { LoginState } from "./auth-state";
 import { contextStatusLabel, type ContextState } from "./context-state";
 import "./renderer.css";
+
+function formatTime(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
 
 type ViewState =
   | { kind: "loading" }
@@ -20,6 +26,7 @@ function DesktopApp() {
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [context, setContext] = useState<ContextState>({ status: "idle" });
+  const [scrubPosition, setScrubPosition] = useState<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -82,6 +89,18 @@ function DesktopApp() {
   const contextLabel = playingTrack
     ? contextStatusLabel(auth.status, context)
     : null;
+
+  const durationMs = playingTrack?.durationMs;
+  const positionMs = playingTrack?.positionMs;
+  const showProgress = durationMs !== undefined && positionMs !== undefined;
+  const scrubValue = scrubPosition ?? positionMs ?? 0;
+
+  function commitSeek() {
+    if (scrubPosition !== null) {
+      void window.linerfy.seekTo(scrubPosition);
+      setScrubPosition(null);
+    }
+  }
 
   return (
     <main className="companion">
@@ -151,26 +170,56 @@ function DesktopApp() {
             </div>
           </section>
           <section className="current-track" aria-label="当前曲目">
-            <div className="track-line">
-              <p className="track-title">{playingTrack.title}</p>
-              {playingTrack.durationMs !== undefined ? (
-                <span className="track-duration">
-                  {Math.floor(playingTrack.durationMs / 60_000)}:
-                  {String(
-                    Math.floor((playingTrack.durationMs % 60_000) / 1000),
-                  ).padStart(2, "0")}
-                </span>
-              ) : null}
-            </div>
-            {playingTrack.durationMs !== undefined &&
-            playingTrack.positionMs !== undefined ? (
-              <progress
-                className="playback-progress"
-                max={playingTrack.durationMs}
-                value={playingTrack.positionMs}
-                aria-label="播放进度"
-              />
+            <p className="track-title">{playingTrack.title}</p>
+            {showProgress ? (
+              <div className="playback-row">
+                <span className="track-time">{formatTime(scrubValue)}</span>
+                <input
+                  className="seek-bar"
+                  type="range"
+                  min={0}
+                  max={durationMs}
+                  value={scrubValue}
+                  onChange={(event) =>
+                    setScrubPosition(Number(event.target.value))
+                  }
+                  onPointerUp={commitSeek}
+                  onKeyUp={commitSeek}
+                  aria-label="播放进度"
+                />
+                <span className="track-time">{formatTime(durationMs)}</span>
+              </div>
             ) : null}
+            <div className="transport">
+              <button
+                className="transport-button"
+                type="button"
+                aria-label="上一首"
+                onClick={() => void window.linerfy.previous()}
+              >
+                <SkipBack aria-hidden="true" />
+              </button>
+              <button
+                className="transport-button primary"
+                type="button"
+                aria-label={playingTrack.state === "playing" ? "暂停" : "播放"}
+                onClick={() => void window.linerfy.togglePlayback()}
+              >
+                {playingTrack.state === "playing" ? (
+                  <Pause aria-hidden="true" />
+                ) : (
+                  <Play aria-hidden="true" />
+                )}
+              </button>
+              <button
+                className="transport-button"
+                type="button"
+                aria-label="下一首"
+                onClick={() => void window.linerfy.next()}
+              >
+                <SkipForward aria-hidden="true" />
+              </button>
+            </div>
           </section>
         </>
       ) : null}

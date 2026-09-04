@@ -27,6 +27,32 @@ body {
   background: var(--canvas);
 }
 
+/* Custom scrollbar: a dark, transparent track with a thin, low-contrast rounded
+   thumb. Covers both Chromium (::-webkit-scrollbar) and the standard
+   `scrollbar-color` so no white gutter ever appears; scrolling stays intact. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
 button {
   border: 0;
   font: inherit;
@@ -117,8 +143,8 @@ button {
 }
 
 .album-artwork {
-  width: 92px;
-  height: 92px;
+  width: 64px;
+  height: 64px;
   flex: 0 0 auto;
   border-radius: 6px;
   object-fit: cover;
@@ -129,20 +155,16 @@ button {
   min-width: 0;
 }
 
-.album-title,
-.track-title {
+.album-title {
   margin: 0;
-  color: var(--text);
-  font-weight: 700;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1.3;
 }
 
-.album-title {
-  font-size: 20px;
-}
-
 .album-meta {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
@@ -153,47 +175,96 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
-.track-line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-}
-
 .track-title {
-  min-width: 0;
+  margin: 0;
   overflow: hidden;
-  font-size: 15px;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.track-duration {
+.playback-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.track-time {
   flex: 0 0 auto;
+  min-width: 34px;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-.playback-progress {
-  display: block;
-  width: 100%;
-  height: 3px;
-  margin-top: 11px;
-  overflow: hidden;
-  border: 0;
+.track-time:last-child {
+  text-align: right;
+}
+
+.seek-bar {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  margin: 0;
   border-radius: 999px;
   appearance: none;
   background: var(--raised);
+  cursor: pointer;
 }
 
-.playback-progress::-webkit-progress-bar {
+.seek-bar::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  appearance: none;
+  background: var(--text);
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.transport-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text);
+  background: transparent;
+}
+
+.transport-button:hover {
   background: var(--raised);
 }
 
-.playback-progress::-webkit-progress-value {
-  border-radius: 999px;
+.transport-button.primary {
+  width: 42px;
+  height: 42px;
+  color: #000000;
   background: var(--text);
+}
+
+.transport-button.primary:hover {
+  background: #ffffff;
+}
+
+.transport-button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.transport-button svg {
+  width: 18px;
+  height: 18px;
 }
 
 .context {

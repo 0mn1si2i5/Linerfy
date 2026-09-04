@@ -3,12 +3,17 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import {
+  APPLE_MUSIC_CONTROL_SCRIPTS,
   APPLE_MUSIC_NOW_PLAYING_SCRIPT,
+  APPLE_MUSIC_SEEK_SCRIPT,
+  SPOTIFY_CONTROL_SCRIPTS,
   SPOTIFY_NOW_PLAYING_SCRIPT,
+  SPOTIFY_SEEK_SCRIPT,
   createAppleMusicProvider,
   createNowPlayingService,
   createSpotifyProvider,
   type NowPlayingTrack,
+  type PlaybackAction,
   type ScriptRunner,
 } from "@linerfy/now-playing";
 import {
@@ -59,14 +64,18 @@ const execFileAsync = promisify(execFile);
 const allowedScripts = new Set([
   SPOTIFY_NOW_PLAYING_SCRIPT,
   APPLE_MUSIC_NOW_PLAYING_SCRIPT,
+  ...Object.values(SPOTIFY_CONTROL_SCRIPTS),
+  ...Object.values(APPLE_MUSIC_CONTROL_SCRIPTS),
+  SPOTIFY_SEEK_SCRIPT,
+  APPLE_MUSIC_SEEK_SCRIPT,
 ]);
 
-const runFixedJxa: ScriptRunner = async (script) => {
+const runFixedJxa: ScriptRunner = async (script, args = []) => {
   if (!allowedScripts.has(script))
     throw new Error("Only bundled automation programs may run");
   const { stdout } = await execFileAsync(
     "/usr/bin/osascript",
-    ["-l", "JavaScript", "-e", script],
+    ["-l", "JavaScript", "-e", script, ...args],
     { timeout: 5_000, killSignal: "SIGKILL" },
   );
   return stdout;
@@ -454,6 +463,33 @@ function createTray() {
 ipcMain.handle("now-playing:get", async () => {
   if (process.platform !== "darwin") return null;
   return nowPlaying.getNowPlaying();
+});
+
+ipcMain.handle("playback:control", async (_event, action: PlaybackAction) => {
+  if (process.platform !== "darwin") return;
+  // `action` is a fixed enum value, validated by the bridge; the bundled
+  // program for that action runs, nothing else.
+  await nowPlaying.control(action);
+  sendNowPlaying();
+});
+
+ipcMain.handle("playback:seek", async (_event, positionMs: unknown) => {
+  if (process.platform !== "darwin") return;
+  if (
+    typeof positionMs !== "number" ||
+    !Number.isFinite(positionMs) ||
+    positionMs < 0
+  ) {
+    return; // reject non-finite or negative input
+  }
+  const track = await nowPlaying.getNowPlaying();
+  const durationMs = track?.durationMs;
+  if (durationMs === undefined || durationMs <= 0) return;
+  // Bound the seek to the current song's duration; the value crosses the bridge
+  // as a number and is passed to the player as a separate argv, never spliced
+  // into a program string or a shell.
+  await nowPlaying.seek(Math.min(positionMs, durationMs));
+  sendNowPlaying();
 });
 
 ipcMain.handle("window:get-state", () => ({ locked: state.locked }));

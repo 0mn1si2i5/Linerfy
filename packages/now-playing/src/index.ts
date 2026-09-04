@@ -1,6 +1,9 @@
 export type NowPlayingProviderName = "spotify" | "apple-music";
 export type PlaybackState = "playing" | "paused";
 
+/** Fixed transport actions the renderer may request. Never an arbitrary command. */
+export type PlaybackAction = "previous" | "toggle" | "next";
+
 export interface NowPlayingTrack {
   provider: NowPlayingProviderName;
   title: string;
@@ -14,10 +17,15 @@ export interface NowPlayingTrack {
 }
 
 export interface NowPlayingProvider {
+  /** Set on concrete providers so the service can route transport controls. */
+  providerName?: NowPlayingProviderName;
   getNowPlaying(): Promise<NowPlayingTrack | null>;
+  control(action: PlaybackAction): Promise<void>;
+  seek(positionMs: number): Promise<void>;
 }
 
-export type ScriptRunner = (script: string) => Promise<string>;
+/** Run a bundled JXA program, optionally with trailing argv (for seek). */
+export type ScriptRunner = (script: string, args?: string[]) => Promise<string>;
 
 export const SPOTIFY_NOW_PLAYING_SCRIPT = String.raw`
 const spotify = Application("Spotify");
@@ -56,6 +64,23 @@ if (!music.running() || music.playerState() === "stopped") {
   });
 }
 `.trim();
+
+export const SPOTIFY_CONTROL_SCRIPTS: Record<PlaybackAction, string> = {
+  previous: `Application("Spotify").previousTrack();`,
+  toggle: `Application("Spotify").playpause();`,
+  next: `Application("Spotify").nextTrack();`,
+};
+
+export const APPLE_MUSIC_CONTROL_SCRIPTS: Record<PlaybackAction, string> = {
+  previous: `Application("Music").backTrack();`,
+  toggle: `Application("Music").playpause();`,
+  next: `Application("Music").nextTrack();`,
+};
+
+// Seek uses run(argv) so the target position is a separate argument, never
+// interpolated into the program text. argv[0] is a validated number (seconds).
+export const SPOTIFY_SEEK_SCRIPT = `function run(argv) { Application("Spotify").setPlayerPosition(parseFloat(argv[0])); }`;
+export const APPLE_MUSIC_SEEK_SCRIPT = `function run(argv) { Application("Music").setPlayerPosition(parseFloat(argv[0])); }`;
 
 function isPlaybackState(value: unknown): value is PlaybackState {
   return value === "playing" || value === "paused";
@@ -131,12 +156,23 @@ function parseTrack(
 
 function createProvider(
   provider: NowPlayingProviderName,
-  script: string,
+  nowPlayingScript: string,
+  controlScripts: Record<PlaybackAction, string>,
+  seekScript: string,
   runScript: ScriptRunner,
 ): NowPlayingProvider {
   return {
+    providerName: provider,
     async getNowPlaying() {
-      return parseTrack(await runScript(script), provider);
+      return parseTrack(await runScript(nowPlayingScript), provider);
+    },
+    async control(action) {
+      await runScript(controlScripts[action]);
+    },
+    async seek(positionMs) {
+      // The caller validates the position; here it is only converted to the
+      // seconds the player APIs expect, passed as argv[0], never interpolated.
+      await runScript(seekScript, [String(positionMs / 1000)]);
     },
   };
 }
@@ -144,7 +180,13 @@ function createProvider(
 export function createSpotifyProvider(
   runScript: ScriptRunner,
 ): NowPlayingProvider {
-  return createProvider("spotify", SPOTIFY_NOW_PLAYING_SCRIPT, runScript);
+  return createProvider(
+    "spotify",
+    SPOTIFY_NOW_PLAYING_SCRIPT,
+    SPOTIFY_CONTROL_SCRIPTS,
+    SPOTIFY_SEEK_SCRIPT,
+    runScript,
+  );
 }
 
 export function createAppleMusicProvider(
@@ -153,6 +195,8 @@ export function createAppleMusicProvider(
   return createProvider(
     "apple-music",
     APPLE_MUSIC_NOW_PLAYING_SCRIPT,
+    APPLE_MUSIC_CONTROL_SCRIPTS,
+    APPLE_MUSIC_SEEK_SCRIPT,
     runScript,
   );
 }
@@ -161,11 +205,17 @@ export function createAppleMusicProvider(
  * Combine providers, preferring the one that is actually playing. When several
  * are playing (or none are), the provider that last succeeded wins, so a stable
  * preference emerges across polls without ever overriding a playing player.
+ * Transport controls route to the same preferred provider.
  */
 export function createNowPlayingService(
   providers: NowPlayingProvider[],
 ): NowPlayingProvider {
   let lastPreferred: NowPlayingProviderName | null = null;
+
+  function preferred(): NowPlayingProvider | null {
+    const provider = providers.find((p) => p.providerName === lastPreferred);
+    return provider ?? providers[0] ?? null;
+  }
 
   return {
     async getNowPlaying() {
@@ -187,6 +237,12 @@ export function createNowPlayingService(
         candidates[0]!;
       lastPreferred = chosen.provider;
       return chosen;
+    },
+    async control(action) {
+      await preferred()?.control(action);
+    },
+    async seek(positionMs) {
+      await preferred()?.seek(positionMs);
     },
   };
 }
