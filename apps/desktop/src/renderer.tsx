@@ -21,7 +21,6 @@ type ViewState =
 
 function DesktopApp() {
   const [view, setView] = useState<ViewState>({ kind: "loading" });
-  const [locked, setLocked] = useState(true);
   const [auth, setAuth] = useState<LoginState>({ status: "signed-out" });
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -45,13 +44,6 @@ function DesktopApp() {
       setView(track ? { kind: "playing", track } : { kind: "no-playback" });
     });
 
-    void window.linerfy
-      .getWindowState()
-      .then((state) => setLocked(state.locked));
-    const stopWindowState = window.linerfy.onWindowStateChanged((state) =>
-      setLocked(state.locked),
-    );
-
     void window.linerfy.getAuthState().then((state) => {
       if (mounted) setAuth(state);
     });
@@ -66,7 +58,6 @@ function DesktopApp() {
     return () => {
       mounted = false;
       stopNowPlaying();
-      stopWindowState();
       stopAuthState();
       stopContext();
     };
@@ -108,14 +99,16 @@ function DesktopApp() {
         <span className="brand">Linerfy</span>
         <div className="header-actions">
           {auth.status === "signed-in" ? (
-            <button
-              className="auth-toggle"
-              type="button"
-              title="退出登录"
-              onClick={() => void window.linerfy.signOut()}
-            >
-              已连接
-            </button>
+            <>
+              <span className="auth-status">已登录</span>
+              <button
+                className="auth-toggle"
+                type="button"
+                onClick={() => void window.linerfy.signOut()}
+              >
+                退出登录
+              </button>
+            </>
           ) : (
             <button
               className="auth-toggle"
@@ -124,17 +117,9 @@ function DesktopApp() {
               disabled={signingIn}
               onClick={() => void handleSignIn()}
             >
-              {signingIn ? "连接中…" : "连接"}
+              {signingIn ? "登录中…" : "登录"}
             </button>
           )}
-          <button
-            className="lock-toggle"
-            type="button"
-            title={locked ? "允许移动和调整大小" : "锁定当前位置和大小"}
-            onClick={() => void window.linerfy.setWindowLocked(!locked)}
-          >
-            {locked ? "解锁" : "锁定"}
-          </button>
         </div>
       </header>
 

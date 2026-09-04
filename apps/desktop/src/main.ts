@@ -335,10 +335,6 @@ function windowStyle() {
     height: state.height,
     ...(state.x !== undefined ? { x: state.x } : {}),
     ...(state.y !== undefined ? { y: state.y } : {}),
-    resizable: !state.locked,
-    movable: !state.locked,
-    alwaysOnTop: state.locked,
-    skipTaskbar: state.locked,
   };
 }
 
@@ -391,15 +387,6 @@ function stopPolling() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
-}
-
-async function applyMode(window: BrowserWindow) {
-  window.setResizable(!state.locked);
-  window.setMovable(!state.locked);
-  window.setAlwaysOnTop(state.locked);
-  window.setSkipTaskbar(state.locked);
-  await saveWindowState(stateFile(), state);
-  window.webContents.send("window:state", { locked: state.locked });
 }
 
 function toggleWindow() {
@@ -490,14 +477,6 @@ ipcMain.handle("playback:seek", async (_event, positionMs: unknown) => {
   // into a program string or a shell.
   await nowPlaying.seek(Math.min(positionMs, durationMs));
   sendNowPlaying();
-});
-
-ipcMain.handle("window:get-state", () => ({ locked: state.locked }));
-
-ipcMain.handle("window:set-locked", async (_event, locked: boolean) => {
-  if (mainWindow) captureWindowBounds(mainWindow);
-  state = { ...state, locked };
-  if (mainWindow) await applyMode(mainWindow);
 });
 
 ipcMain.handle("auth:get-state", () => loginState());

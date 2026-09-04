@@ -17,41 +17,29 @@ async function tempFile(): Promise<string> {
 }
 
 describe("window state", () => {
-  it("defaults to a locked window", () => {
-    expect(defaultWindowState().locked).toBe(true);
+  it("defaults to the base window geometry", () => {
+    expect(defaultWindowState()).toEqual({ width: 760, height: 560 });
   });
 
   it("repairs a malformed persisted state to safe defaults", () => {
-    expect(
-      sanitizeWindowState({ locked: false, width: 1, height: 10 }),
-    ).toEqual({ locked: false, width: 760, height: 560 });
+    expect(sanitizeWindowState({ width: 1, height: 10 })).toEqual({
+      width: 760,
+      height: 560,
+    });
     expect(sanitizeWindowState("garbage")).toEqual(defaultWindowState());
     expect(sanitizeWindowState(null)).toEqual(defaultWindowState());
   });
 
   it("keeps valid fields including optional position", () => {
     expect(
-      sanitizeWindowState({
-        locked: false,
-        width: 900,
-        height: 700,
-        x: 12,
-        y: 34,
-      }),
-    ).toEqual({ locked: false, width: 900, height: 700, x: 12, y: 34 });
+      sanitizeWindowState({ width: 900, height: 700, x: 12, y: 34 }),
+    ).toEqual({ width: 900, height: 700, x: 12, y: 34 });
   });
 
   it("round-trips state through a file", async () => {
     const file = await tempFile();
-    await saveWindowState(file, {
-      locked: false,
-      width: 800,
-      height: 600,
-      x: 5,
-      y: 6,
-    });
+    await saveWindowState(file, { width: 800, height: 600, x: 5, y: 6 });
     await expect(loadWindowState(file)).resolves.toEqual({
-      locked: false,
       width: 800,
       height: 600,
       x: 5,

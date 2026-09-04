@@ -1,6 +1,6 @@
 import type { BrowserWindowConstructorOptions } from "electron";
 
-/** Non-security window chrome, overridable per mode (popover vs normal). */
+/** Non-security window chrome, adjustable per launch state. */
 export interface WindowStyleOptions {
   width?: number;
   height?: number;
@@ -8,17 +8,12 @@ export interface WindowStyleOptions {
   minHeight?: number;
   x?: number;
   y?: number;
-  resizable?: boolean;
-  movable?: boolean;
-  alwaysOnTop?: boolean;
-  skipTaskbar?: boolean;
   show?: boolean;
 }
 
 /**
  * Build the window options with the renderer security boundary fixed and only
- * the chrome adjustable. The security fields are non-negotiable regardless of
- * popover/normal mode.
+ * the chrome adjustable. The security fields are non-negotiable.
  */
 export function createWindowOptions(
   preload: string,

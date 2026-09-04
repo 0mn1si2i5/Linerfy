@@ -1,9 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-/** Persisted window geometry and whether the current bounds are locked. */
+/** Persisted window geometry. */
 export interface WindowState {
-  locked: boolean;
   width: number;
   height: number;
   x?: number;
@@ -13,7 +12,7 @@ export interface WindowState {
 export const MIN_WINDOW_DIMENSION = 200;
 
 export function defaultWindowState(): WindowState {
-  return { locked: true, width: 760, height: 560 };
+  return { width: 760, height: 560 };
 }
 
 /** Clamp/repair an untrusted persisted value into a valid WindowState. */
@@ -22,7 +21,6 @@ export function sanitizeWindowState(value: unknown): WindowState {
   if (typeof value !== "object" || value === null) return defaults;
   const v = value as Record<string, unknown>;
   return {
-    locked: typeof v.locked === "boolean" ? v.locked : defaults.locked,
     width:
       typeof v.width === "number" && v.width >= MIN_WINDOW_DIMENSION
         ? v.width
