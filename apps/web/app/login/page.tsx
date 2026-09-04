@@ -1,7 +1,6 @@
 "use client";
 
 import { LinerfyMark } from "@linerfy/ui";
-import Link from "next/link";
 import { useState } from "react";
 
 import { createBrowserAuthClient } from "../../lib/browser-auth";
@@ -50,9 +49,6 @@ export default function LoginPage() {
         >
           使用 GitHub 登录
         </button>
-        <Link className="quiet-link" href="/">
-          返回
-        </Link>
         {error ? (
           <p className="form-error" role="alert">
             {error}

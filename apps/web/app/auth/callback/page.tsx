@@ -2,7 +2,7 @@
 
 import { LinerfyMark } from "@linerfy/ui";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { createBrowserAuthClient } from "../../../lib/browser-auth";
@@ -14,7 +14,6 @@ const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const configured = Boolean(supabaseUrl && supabaseAnon);
 
 function Exchange() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const code = searchParams.get("code");
   const oauthError =
@@ -36,10 +35,10 @@ function Exchange() {
       if (error) {
         setMessage(error.message);
       } else {
-        router.push("/");
+        setMessage("登录成功。");
       }
     });
-  }, [code, oauthError, router]);
+  }, [code, oauthError]);
 
   return (
     <div className="auth-card compact">
