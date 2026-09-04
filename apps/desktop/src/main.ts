@@ -29,9 +29,9 @@ import {
 } from "electron";
 
 import type { LoginState, SignInResult } from "./auth-state";
+import { ContextEngine, type FetchOutcome } from "./context-engine";
 import {
   parseContextApiResponse,
-  trackKey,
   type ContextApiResponse,
   type ContextState,
 } from "./context-state";
@@ -88,6 +88,8 @@ const nowPlaying = createNowPlayingService([
 
 const POLL_INTERVAL_MS = 2500;
 const CONTEXT_REQUEST_TIMEOUT_MS = 15_000;
+const CONTEXT_POLL_INTERVAL_MS = 2500;
+const CONTEXT_MAX_RETRIES = 3;
 const TOGGLE_SHORTCUT = "CommandOrControl+Shift+L";
 
 let mainWindow: BrowserWindow | null = null;
@@ -198,33 +200,22 @@ async function ensureFreshSession(): Promise<SupabaseSession | null> {
 // disabled until it and a session are both present.
 const apiUrl = process.env.LINERFY_API_URL || __LINERFY_BUILD_API_URL__;
 
-let contextFetchSeq = 0;
-let lastFetchedTrackKey: string | null = null;
-let pendingContext = false;
-
 function sendContext(state: ContextState) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("context:changed", state);
   }
 }
 
-// Fetch context for the current track, discarding stale responses: the seq
-// guard ensures only the latest request is rendered, and `lastFetchedTrackKey`
-// avoids re-fetching an already-ready track on every poll.
-async function fetchContextForTrack(track: NowPlayingTrack) {
-  if (!apiUrl) {
-    sendContext({ status: "idle" });
-    return;
-  }
-  let session = await ensureFreshSession();
-  if (!session) {
-    sendContext({ status: "idle" });
-    return;
-  }
-  const seq = ++contextFetchSeq;
-  if (lastFetchedTrackKey !== trackKey(track)) {
-    sendContext({ status: "loading" });
-  }
+// One authenticated POST /api/context, narrowed to a small result the
+// ContextEngine acts on. Session refresh and the 401/403 retry live here, out
+// of the engine's timing logic.
+async function fetchContextOutcome(
+  track: NowPlayingTrack,
+  signal: AbortSignal,
+): Promise<FetchOutcome> {
+  if (!apiUrl) return { status: "unauthorized" };
+  const session = await ensureFreshSession();
+  if (!session) return { status: "unauthorized" };
 
   const post = (token: string) =>
     net.fetch(`${apiUrl.replace(/\/+$/, "")}/api/context`, {
@@ -240,99 +231,51 @@ async function fetchContextForTrack(track: NowPlayingTrack) {
         album: track.album,
         state: track.state,
       }),
-      signal: AbortSignal.timeout(CONTEXT_REQUEST_TIMEOUT_MS),
+      signal,
     });
 
   let response: Response;
   try {
     response = await post(session.access_token);
   } catch {
-    if (seq === contextFetchSeq) {
-      pendingContext = true;
-      sendContext({ status: "error", message: "网络错误" });
-    }
-    return;
+    return { status: "network-error" };
   }
-  if (seq !== contextFetchSeq) return;
 
   // A 401/403 means the access token is stale or revoked: refresh once and
   // retry. If the refresh (or the retry) still fails, clear the session so the
   // UI falls back to signed-out rather than showing a stale logged-in state.
   if (response.status === 401 || response.status === 403) {
-    session = await refreshOrClear();
-    if (!session) {
-      if (seq === contextFetchSeq) sendContext({ status: "idle" });
-      return;
-    }
+    const refreshed = await refreshOrClear();
+    if (!refreshed) return { status: "unauthorized" };
     try {
-      response = await post(session.access_token);
+      response = await post(refreshed.access_token);
     } catch {
-      if (seq === contextFetchSeq) {
-        pendingContext = true;
-        sendContext({ status: "error", message: "网络错误" });
-      }
-      return;
+      return { status: "network-error" };
     }
-    if (seq !== contextFetchSeq) return;
     if (response.status === 401 || response.status === 403) {
       tokenStore?.clear();
       sendAuthState();
-      if (seq === contextFetchSeq) sendContext({ status: "idle" });
-      return;
+      return { status: "unauthorized" };
     }
   }
 
-  let body: ContextApiResponse;
   try {
-    // Validate the response against the shared contract at runtime, never with
-    // a blind cast: a `ready` that omits its context is rejected here.
-    body = parseContextApiResponse(await response.json());
+    const body: ContextApiResponse = parseContextApiResponse(
+      await response.json(),
+    );
+    return { status: "ok", body };
   } catch {
-    if (seq === contextFetchSeq) {
-      pendingContext = true;
-      sendContext({ status: "error", message: "响应格式错误" });
-    }
-    return;
-  }
-  if (seq !== contextFetchSeq) return;
-  lastFetchedTrackKey = trackKey(track);
-  if (body.status === "ready") {
-    pendingContext = false;
-    sendContext({ status: "ready", context: body.context });
-  } else if (body.status === "partial") {
-    // Partial content is safe to show now, but the job has not finished: keep
-    // polling until `ready` or a terminal state arrives.
-    pendingContext = true;
-    sendContext({
-      status: "partial",
-      context: body.context,
-      stage: body.stage ?? "",
-      paused: body.paused,
-    });
-  } else if (body.status === "queued" || body.status === "running") {
-    pendingContext = true;
-    sendContext({
-      status: body.status,
-      stage: body.stage ?? "",
-      paused: body.paused,
-    });
-  } else {
-    pendingContext = false;
-    sendContext({ status: body.status });
+    return { status: "invalid" };
   }
 }
 
-function maybeFetchContext(track: NowPlayingTrack | null) {
-  if (!track) {
-    lastFetchedTrackKey = null;
-    pendingContext = false;
-    sendContext({ status: "idle" });
-    return;
-  }
-  const key = trackKey(track);
-  if (key === lastFetchedTrackKey && !pendingContext) return;
-  void fetchContextForTrack(track);
-}
+const contextEngine = new ContextEngine({
+  fetch: fetchContextOutcome,
+  send: sendContext,
+  pollIntervalMs: CONTEXT_POLL_INTERVAL_MS,
+  requestTimeoutMs: CONTEXT_REQUEST_TIMEOUT_MS,
+  maxRetries: CONTEXT_MAX_RETRIES,
+});
 
 function windowStyle() {
   return {
@@ -373,7 +316,7 @@ function sendNowPlaying() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("now-playing:changed", track);
       }
-      maybeFetchContext(track);
+      contextEngine.onTrack(track);
     })
     .catch(() => undefined)
     .finally(() => {
@@ -392,6 +335,7 @@ function stopPolling() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  contextEngine.stop();
 }
 
 function toggleWindow() {
@@ -488,8 +432,7 @@ ipcMain.handle("auth:get-state", () => loginState());
 
 ipcMain.handle("auth:sign-out", () => {
   tokenStore?.clear();
-  lastFetchedTrackKey = null;
-  pendingContext = false;
+  contextEngine.stop();
   sendContext({ status: "idle" });
   sendAuthState();
 });
@@ -510,9 +453,9 @@ ipcMain.handle("auth:sign-in", async (): Promise<SignInResult> => {
     );
     tokenStore?.save(JSON.stringify(session));
     sendAuthState();
-    lastFetchedTrackKey = null;
-    pendingContext = false;
-    void nowPlaying.getNowPlaying().then(maybeFetchContext);
+    void nowPlaying
+      .getNowPlaying()
+      .then((track) => contextEngine.onTrack(track));
     return loginState();
   } catch (error) {
     return {
