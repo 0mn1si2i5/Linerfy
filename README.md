@@ -29,6 +29,16 @@ Guardian、Pitchfork、Album of the Year、Metacritic、Rate Your Music、Reddit
 
 Guardian, Pitchfork, AOTY, Metacritic, RYM, Reddit, and other unlicensed or unauthorized sources are not part of v1: no bypass scrapers, and the legacy Guardian adapter is kept reference-only and disabled by default.
 
+## 产品边界 / Product boundaries
+
+内容展示层级（从上到下）：当前播放与封面 → 曲风 → 相关标签 → 综合观点 → 各来源卡片 → 原文链接。Display order: now-playing + cover → genres → related tags → consensus → source cards → original links.
+
+- 综合观点仅在至少两个许可证兼容的来源之间合成；不兼容语料不混成一个派生总结。Consensus is synthesized only across license-compatible sources.
+- 每条公开 claim 必须能追溯到已保存的 review document；全文永不公开，仅元数据、短摘录/转述与原文链接进入公开输出。Every public claim traces to a stored review document; full text is never public.
+- 评分保留原始量表与票数（少于 5 票标「样本较少」），不生成 Linerfy 自有综合分。Ratings keep their original scale and vote count; no Linerfy composite score.
+- track 无独立乐评时优先展示所属专辑资料并标「专辑乐评」；无法可靠匹配时显示原元数据与「无法可靠匹配」，不猜测、不写污染实体。Tracks without their own reviews fall back to album material labelled "album review"; unverifiable matches show the raw metadata and "unable to match" rather than guessing.
+- 模型用于翻译、归纳与压缩，不是事实来源；部署时只激活一个模型，不提供用户模型选择，也不自动跨模型 fallback。The model summarizes and compresses; it is not a source of facts. One model is active at a time with no automatic fallback.
+
 ## 认证与隐私 / Auth & privacy
 
 - 登录使用 Supabase Auth 的 GitHub OAuth，并以 GitHub 数字用户 ID 校验 Vercel 环境变量白名单。
@@ -98,5 +108,3 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 - **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；公开说明页与已认证 `/context/[slug]`、service-role 仅在服务端；可追溯中文总结（模型边界、按 scope 原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 四阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
 - **生产基础设施与 Web OAuth 已联调**：生产 Supabase 迁移、Vercel Web/worker、Vault 与定时 worker 已配置；GitHub OAuth 的浏览器登录已于 2026-09-04 复验通过。桌面 OAuth 仍需用重新打包的 `.app` 做一次人工回环验证。
-
-细节见 [`docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`](docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md)。

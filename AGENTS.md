@@ -25,7 +25,13 @@ Linerfy is a lightweight music-criticism companion, not a player or social netwo
 - `ingest`：来源适配、策略、溯源与批处理。Adapters, source policy, provenance, and batch processing.
 - `supabase/migrations`：规范化存储与行级访问规则。Normalized storage and row-level access rules.
 
-当产品范围、技术架构或路线图发生变化时，先阅读并同步 `docs/PRODUCT_AND_ARCHITECTURE.zh-CN.md`。Read and update that document when product scope, architecture, or roadmap changes.
+当产品范围、技术架构或路线图发生变化时，先阅读并同步根目录 `README.md` 与 `AGENTS.md`。Read and update the root README.md and AGENTS.md when product scope, architecture, or roadmap changes.
+
+## 提交规则 / Commit rules
+
+- 提交作者保持仓库真实用户，不重写 author/committer 身份或邮箱。Commit authorship stays the real repo user; do not rewrite author/committer identity.
+- 提交信息与 trailer 不得包含 AI、Claude、Anthropic 或任何工具共创署名。Commit messages and trailers must not include AI/Claude/Anthropic/tool co-authorship.
+- 不提交提示词、计划、报告或临时审计文件；设计文档只保留长期有效的产品级或架构级事实。Never commit prompts, plans, reports, or temporary audit files; keep only durable product- or architecture-level facts in docs.
 
 完成前运行相关 package 检查和根目录完整检查；修改桌面权限边界时还要生成本地 Electron 包。提交只包含产品代码、测试和长期文档，不包含构建产物、密钥、提示词、计划或临时交接材料。
 
