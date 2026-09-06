@@ -137,6 +137,8 @@ def build_context(review: GuardianReview) -> IngestedContext:
         score_scale=review.score_scale,
         public_excerpt=excerpt_source[: GUARDIAN_POLICY.excerpt_max_chars],
         content=review.body_text,
+        license_id=GUARDIAN_POLICY.license_id,
+        license_url=GUARDIAN_POLICY.license_url,
         policy=GUARDIAN_POLICY,
     )
     return IngestedContext(

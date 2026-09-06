@@ -2,8 +2,12 @@
 
 CritiqueBrainz hosts user reviews under a Creative Commons license and is
 addressed through its public WS API by MusicBrainz release-group id. Reviews are
-stored with their license id so the corpus provenance is explicit; the full
-body stays private while a bounded excerpt is public.
+stored with their *document-level* license id (read from the response, never
+hard-coded); the full body stays private while a bounded excerpt is public.
+
+The listing response also carries an official ``average_rating`` (value + count)
+that becomes the source's rating snapshot; individual per-review ratings are not
+averaged here because they are a partial page, not the whole population.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .models import (
@@ -39,31 +44,62 @@ def strip_markdown(raw: str) -> str:
     return " ".join(line for line in lines if line).strip()
 
 
+def _parse_created(created: str | None) -> date | None:
+    """Parse a review's ``created`` field (ISO datetime or RFC 1123 HTTP date).
+
+    The real listing returns HTTP dates like "Fri, 06 Mar 2026 04:06:52 GMT";
+    older hand-written fixtures use ISO. Unknown formats raise a source-level
+    controlled error rather than guessing a date or crashing the whole fetch.
+    """
+    if not created:
+        return None
+    iso = created[:10]
+    try:
+        return date.fromisoformat(iso)
+    except ValueError:
+        pass
+    parsed = parsedate_to_datetime(created)
+    if parsed is not None:
+        return parsed.date()
+    raise ValueError(f"unrecognized created format: {created!r}")
+
+
 @dataclass(frozen=True)
 class CritiqueBrainzReview:
     id: str
     entity_id: str
+    entity_type: str
     text: str
     license_id: str
+    license_url: str
     language: str
     rating: int | None
     author: str
     created: date | None
 
 
+@dataclass(frozen=True)
+class CritiqueBrainzListing:
+    """A listing response: its reviews plus the official aggregate rating."""
+
+    reviews: tuple[CritiqueBrainzReview, ...]
+    average_rating: float | None
+    rating_count: int
+
+
 def parse_review(item: dict[str, Any]) -> CritiqueBrainzReview:
     """Parse one CritiqueBrainz review object into a CritiqueBrainzReview."""
-    license_info = item.get("license") or {}
-    created = item.get("created")
     return CritiqueBrainzReview(
         id=item["id"],
         entity_id=item.get("entity_id", ""),
-        text=item.get("text", ""),
-        license_id=license_info.get("id", ""),
+        entity_type=item.get("entity_type", ""),
+        text=item.get("text") or "",
+        license_id=item.get("license_id") or (item.get("license") or {}).get("id", ""),
+        license_url=item.get("info_url") or (item.get("license") or {}).get("url", ""),
         language=item.get("language", "en"),
         rating=item.get("rating"),
         author=(item.get("user") or {}).get("display_name", ""),
-        created=date.fromisoformat(created[:10]) if created else None,
+        created=_parse_created(item.get("created")),
     )
 
 
@@ -82,13 +118,28 @@ class CritiqueBrainzAdapter:
 
     def search_reviews(
         self, release_group_mbid: str, limit: int = 10
-    ) -> list[CritiqueBrainzReview]:
+    ) -> CritiqueBrainzListing:
         query = urllib.parse.urlencode(
             {"release_group": release_group_mbid, "limit": limit, "fmt": "json"}
         )
         url = f"{_API_BASE}/review/?{query}"
         payload = self._get_json(url)
-        return [parse_review(item) for item in payload.get("reviews", [])]
+
+        # Only reviews whose entity_id/type match the target are kept; a
+        # mislabelled review must not be stored or summarized just because it
+        # came back from a query filtered by release_group.
+        reviews = tuple(
+            parse_review(item)
+            for item in payload.get("reviews", [])
+            if item.get("entity_id") == release_group_mbid
+            and item.get("entity_type") == "release_group"
+        )
+        aggregate = payload.get("average_rating") or {}
+        return CritiqueBrainzListing(
+            reviews=reviews,
+            average_rating=aggregate.get("rating"),
+            rating_count=aggregate.get("count", 0) or 0,
+        )
 
 
 CRITIQUEBRAINZ_SOURCE = ReviewSource(
@@ -105,16 +156,32 @@ CRITIQUEBRAINZ_POLICY = SourcePolicy(
     excerpt_max_chars=280,
     attribution_required=True,
     removal_contact="rights@linerfy.local",
-    license_id="CC BY-NC-SA 3.0",
-    license_url="https://creativecommons.org/licenses/by-nc-sa/3.0/",
+    license_id="CC BY-SA 3.0",
+    license_url="https://creativecommons.org/licenses/by-sa/3.0/",
 )
 
 
 def to_document(
     review: CritiqueBrainzReview, release: ReleaseEntity
-) -> ReviewDocument:
-    """Wrap a CritiqueBrainz review in a ReviewDocument for the given release."""
-    excerpt = strip_markdown(review.text)[: CRITIQUEBRAINZ_POLICY.excerpt_max_chars]
+) -> ReviewDocument | None:
+    """Wrap a text-bearing CritiqueBrainz review in a ReviewDocument.
+
+    A rating-only review (no body) is not a review document and must not be
+    summarized: it returns ``None`` so the caller can record its rating without
+    inventing an empty excerpt or a model call.
+    """
+    excerpt = strip_markdown(review.text)
+    if not excerpt:
+        return None
+    # Missing license metadata is not permission to assume the provider default.
+    known_urls = {
+        "CC BY-SA 3.0": "https://creativecommons.org/licenses/by-sa/3.0/",
+        "CC BY-SA 4.0": "https://creativecommons.org/licenses/by-sa/4.0/",
+        "CC BY-NC-SA 3.0": "https://creativecommons.org/licenses/by-nc-sa/3.0/",
+    }
+    license_url = known_urls.get(review.license_id)
+    if not license_url:
+        return None
     return ReviewDocument(
         id=f"critiquebrainz-{review.id}",
         release_id=release.id,
@@ -125,7 +192,9 @@ def to_document(
         published_at=review.created,
         score=float(review.rating) if review.rating is not None else None,
         score_scale=5 if review.rating is not None else None,
-        public_excerpt=excerpt,
+        public_excerpt=excerpt[: CRITIQUEBRAINZ_POLICY.excerpt_max_chars],
         content=review.text,
+        license_id=review.license_id,
+        license_url=license_url,
         policy=CRITIQUEBRAINZ_POLICY,
     )

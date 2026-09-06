@@ -79,3 +79,15 @@ def test_rejects_camel_case_provider_url() -> None:
 
 def test_normalize_folds_case_and_collapses_space() -> None:
     assert normalize("  Lana   Del Rey ") == "lana del rey"
+
+
+def test_fingerprint_does_not_collide_across_separator() -> None:
+    left = NowPlayingRequest(provider="spotify", title="t", artist="a:b", album="c")
+    right = NowPlayingRequest(provider="spotify", title="t", artist="a", album="b:c")
+    assert left.fingerprint() != right.fingerprint()
+
+
+def test_fingerprint_keeps_non_ascii_albums_distinct() -> None:
+    jay = NowPlayingRequest(provider="spotify", title="t", artist="周杰伦", album="范特西")
+    faye = NowPlayingRequest(provider="spotify", title="t", artist="王菲", album="寓言")
+    assert jay.fingerprint() != faye.fingerprint()

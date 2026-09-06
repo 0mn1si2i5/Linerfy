@@ -207,5 +207,7 @@ def to_document(
         score_scale=None,
         public_excerpt=excerpt,
         content=section.plain_text,
+        license_id=WIKIPEDIA_POLICY.license_id,
+        license_url=WIKIPEDIA_POLICY.license_url,
         policy=WIKIPEDIA_POLICY,
     )

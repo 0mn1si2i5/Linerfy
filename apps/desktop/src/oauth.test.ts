@@ -6,6 +6,7 @@ import {
   authorizeUrl,
   exchangeCodeForSession,
   generatePkce,
+  InvalidRefreshTokenError,
   refreshSession,
   startCallbackServer,
 } from "./oauth";
@@ -205,5 +206,25 @@ describe("refreshSession", () => {
       vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response),
     );
     await expect(refreshSession(config, "old-rt")).rejects.toThrow(/HTTP 400/);
+  });
+
+  it("types only a definitive token rejection, not a transient one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 401 }) as unknown as Response),
+    );
+    await expect(refreshSession(config, "old-rt")).rejects.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503 }) as unknown as Response),
+    );
+    const transient = refreshSession(config, "old-rt");
+    await expect(transient).rejects.toThrow(/HTTP 503/);
+    await expect(transient).rejects.not.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
   });
 });

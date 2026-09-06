@@ -6,6 +6,7 @@ import {
   nowPlayingRequestSchema,
   releaseSlug,
   requestFingerprint,
+  legacyRequestFingerprint,
   toIngestPayload,
 } from "../../../lib/request";
 import { serviceClient } from "../../../lib/supabase";
@@ -53,11 +54,25 @@ export async function POST(request: NextRequest) {
   // `ready` is determined by the job's state, never by the mere presence of
   // catalog rows: an in-progress job with partial data must stay `partial` so
   // the client keeps polling until it actually finishes.
-  const { data: job, error: jobError } = await supabase
+  let { data: job, error: jobError } = await supabase
     .from("enrichment_jobs")
-    .select("state, stage, resolution_status")
+    .select("id, state, stage, resolution_status, source_errors, payload")
     .eq("entity_id", fingerprint)
     .maybeSingle();
+  if (!job && !jobError) {
+    const legacy = await supabase
+      .from("enrichment_jobs")
+      .select("id, state, stage, resolution_status, source_errors, payload")
+      .eq("entity_id", legacyRequestFingerprint(parsed.data))
+      .maybeSingle();
+    jobError = legacy.error;
+    // Verify the tuple too: legacy delimiter collisions must not join albums.
+    if (legacy.data) {
+      const old = nowPlayingRequestSchema.safeParse(legacy.data.payload);
+      if (old.success && requestFingerprint(old.data) === fingerprint)
+        job = legacy.data;
+    }
+  }
   if (jobError) {
     return NextResponse.json({ error: "query failed" }, { status: 500 });
   }
@@ -70,6 +85,32 @@ export async function POST(request: NextRequest) {
     .eq("key", "model_generation_paused")
     .maybeSingle();
   const paused = pausedFlag?.value === "true";
+
+  if (
+    job &&
+    parsed.data.retry &&
+    (job.state === "failed" || job.source_errors?.length)
+  ) {
+    const { data: restarted, error } = await supabase.rpc("retry_enrichment", {
+      job_id: job.id,
+    });
+    if (error)
+      return NextResponse.json({ error: "retry failed" }, { status: 500 });
+    if (restarted) {
+      await supabase.rpc("wake_worker");
+      const content = await getContextBySlug(slug);
+      return NextResponse.json(
+        content.status === "ok"
+          ? {
+              status: "partial",
+              stage: "fetch_sources",
+              context: content.context,
+              paused,
+            }
+          : { status: "queued", stage: "fetch_sources", paused },
+      );
+    }
+  }
 
   if (!job) {
     // No job: either the release was already completed (cached) or it has never
@@ -120,7 +161,15 @@ export async function POST(request: NextRequest) {
   if (job.state === "ready") {
     const result = await getContextBySlug(slug);
     if (result.status === "ok") {
-      return NextResponse.json({ status: "ready", context: result.context });
+      return NextResponse.json(
+        job.source_errors?.length
+          ? {
+              status: "failed",
+              stage: "fetch_sources",
+              context: result.context,
+            }
+          : { status: "ready", context: result.context },
+      );
     }
     // The job is marked ready but its context cannot be assembled — surface a
     // real failure rather than a bare `ready` the client would misread as
@@ -135,6 +184,19 @@ export async function POST(request: NextRequest) {
   }
 
   if (job.state === "unavailable" || job.state === "failed") {
+    // A failed job can still carry whatever was published before the failure
+    // (e.g. one source failed after another was summarized); surface that
+    // content rather than discarding it. Unavailable jobs have no content.
+    if (job.state === "failed") {
+      const result = await getContextBySlug(slug);
+      if (result.status === "ok") {
+        return NextResponse.json({
+          status: "failed",
+          stage: job.stage,
+          context: result.context,
+        });
+      }
+    }
     return NextResponse.json({ status: job.state, stage: job.stage });
   }
 

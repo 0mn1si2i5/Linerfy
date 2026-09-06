@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import { assembleMusicContext, type CatalogRows } from "./from-catalog";
 
+it("allows a metadata-only partial context without fabricated review documents", () => {
+  const context = assembleMusicContext({
+    ...catalog,
+    genres: [],
+    genre_sources: [],
+    review_documents: [],
+    review_excerpts: [],
+    summary_runs: [],
+    claims: [],
+    claim_sources: [],
+  });
+  expect(context.sources).toEqual([]);
+  expect(context.sourceSummaries).toEqual([]);
+});
+
 const catalog: CatalogRows = {
   artists: [{ id: "a1", slug: "lana-del-rey", name: "Lana Del Rey" }],
   releases: [
@@ -22,6 +37,7 @@ const catalog: CatalogRows = {
     { genre_id: "g1", document_id: "d1" },
     { genre_id: "g2", document_id: "d2" },
   ],
+  release_ratings: [],
   review_sources: [
     {
       id: "s1",
@@ -180,6 +196,7 @@ const secondAlbum: CatalogRows = {
   ],
   genres: [{ id: "g3", release_id: "r2", name: "Electronic" }],
   genre_sources: [{ genre_id: "g3", document_id: "d3" }],
+  release_ratings: [],
   review_sources: [
     {
       id: "s3",
@@ -247,6 +264,7 @@ function mergeRows(...rows: CatalogRows[]): CatalogRows {
     releases: rows.flatMap((r) => r.releases),
     genres: rows.flatMap((r) => r.genres),
     genre_sources: rows.flatMap((r) => r.genre_sources),
+    release_ratings: rows.flatMap((r) => r.release_ratings),
     review_sources: rows.flatMap((r) => r.review_sources),
     review_documents: rows.flatMap((r) => r.review_documents),
     review_excerpts: rows.flatMap((r) => r.review_excerpts),
@@ -285,6 +303,56 @@ describe("assembleMusicContext", () => {
     expect(context.consensusBlocks[0]?.claims[0]?.sourceIds).toContain(
       "pitchfork-nfr",
     );
+  });
+
+  it("omits the year when the release date is unknown", () => {
+    const withoutDate: CatalogRows = {
+      ...catalog,
+      releases: [{ ...catalog.releases[0]!, release_date: null }],
+    };
+
+    const context = assembleMusicContext(withoutDate);
+
+    expect(context.release.year).toBeUndefined();
+  });
+
+  it("maps provider rating snapshots and omits unknown vote counts", () => {
+    const withRatings: CatalogRows = {
+      ...catalog,
+      release_ratings: [
+        {
+          id: "rt1",
+          release_id: "r1",
+          provider: "musicbrainz",
+          value: 4.2,
+          scale: 5,
+          vote_count: 87,
+          source_url: "https://musicbrainz.org/release-group/x",
+        },
+        {
+          id: "rt2",
+          release_id: "r1",
+          provider: "critiquebrainz",
+          value: 4.0,
+          scale: 5,
+          vote_count: null,
+          source_url: null,
+        },
+      ],
+    };
+
+    const context = assembleMusicContext(withRatings);
+
+    expect(context.ratings).toEqual([
+      {
+        provider: "musicbrainz",
+        value: 4.2,
+        scale: 5,
+        voteCount: 87,
+        sourceUrl: "https://musicbrainz.org/release-group/x",
+      },
+      { provider: "critiquebrainz", value: 4.0, scale: 5 },
+    ]);
   });
 
   it("excludes non-published documents", () => {

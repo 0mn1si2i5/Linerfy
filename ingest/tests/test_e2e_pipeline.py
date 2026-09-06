@@ -19,7 +19,11 @@ import re
 import pytest
 from _db_helpers import skip_unless_test_db
 
-from linerfy_ingest.critiquebrainz import CritiqueBrainzAdapter, CritiqueBrainzReview
+from linerfy_ingest.critiquebrainz import (
+    CritiqueBrainzAdapter,
+    CritiqueBrainzListing,
+    CritiqueBrainzReview,
+)
 from linerfy_ingest.db import connect
 from linerfy_ingest.entities import ReleaseGroup
 from linerfy_ingest.jobs import PostgresJobStore, run_once
@@ -61,8 +65,8 @@ class _FakeMB(MusicBrainzAdapter):
             title=_ALBUM,
             artist=_ARTIST,
             first_release_date="2020-01-01",
-            tags=(),
-            rating=8.0,
+            genres=(),
+            rating=4.2,
             rating_votes=10,
             artwork_url=None,
         )
@@ -70,18 +74,24 @@ class _FakeMB(MusicBrainzAdapter):
 
 class _FakeCB(CritiqueBrainzAdapter):
     def search_reviews(self, mbid):
-        return [
-            CritiqueBrainzReview(
-                id="cb-1",
-                entity_id=mbid,
-                text="A user review that praises the album's writing.",
-                license_id="CC BY-NC-SA 3.0",
-                language="en",
-                rating=4,
-                author="Reviewer",
-                created=None,
-            )
-        ]
+        return CritiqueBrainzListing(
+            reviews=(
+                CritiqueBrainzReview(
+                    id="cb-1",
+                    entity_id=mbid,
+                    entity_type="release_group",
+                    text="A user review that praises the album's writing.",
+                    license_id="CC BY-SA 3.0",
+                    license_url="https://creativecommons.org/licenses/by-sa/3.0/",
+                    language="en",
+                    rating=4,
+                    author="Reviewer",
+                    created=None,
+                ),
+            ),
+            average_rating=4.0,
+            rating_count=1,
+        )
 
 
 class _FakeWiki(WikipediaAdapter):
@@ -191,9 +201,9 @@ def test_pipeline_runs_resolve_to_consensus_against_test_db() -> None:
                 (_SLUG,),
             ).fetchall()
             assert {row[0] for row in scopes} == {
-                "source::critiquebrainz",
-                "source::wikipedia",
-                "consensus::CC BY-NC-SA 3.0",
+                "source::critiquebrainz::CC BY-SA 3.0",
+                "source::wikipedia::CC BY-SA 4.0",
+                "consensus::CC BY-SA 3.0",
                 "consensus::CC BY-SA 4.0",
             }
 

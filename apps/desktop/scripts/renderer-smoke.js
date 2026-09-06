@@ -54,7 +54,7 @@ app.whenReady().then(() => {
     // Flag only the errors that indicate a broken React tree. Unhandled IPC
     // rejections are expected here (no main-process handlers are registered in
     // this smoke), so they are deliberately not treated as failures.
-    if ((level === "error" || level === 3) && DUP_RE_RE.test(message)) {
+    if ((level === "error" || level === 3) && DUP_REACT_RE.test(message)) {
       rendererError = true;
       console.error("SMOKE: renderer error:", message);
     }

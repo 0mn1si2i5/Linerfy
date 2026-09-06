@@ -14,6 +14,7 @@ def test_emits_every_catalog_table() -> None:
         "artists",
         "releases",
         "genres",
+        "release_ratings",
         "review_sources",
         "source_policies",
         "review_documents",

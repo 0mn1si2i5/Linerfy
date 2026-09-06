@@ -40,11 +40,13 @@ interface Harness {
 
 function setup(options: Partial<ContextEngineOptions> = {}): Harness {
   const pending: Array<ReturnType<typeof deferred>> = [];
-  const fetch = vi.fn((_track: NowPlayingTrack, _signal: AbortSignal) => {
-    const d = deferred();
-    pending.push(d);
-    return d.promise;
-  });
+  const fetch = vi.fn(
+    (_track: NowPlayingTrack, _signal: AbortSignal, _retry?: boolean) => {
+      const d = deferred();
+      pending.push(d);
+      return d.promise;
+    },
+  );
   const send = vi.fn();
   const engine = new ContextEngine({
     fetch,
@@ -91,6 +93,18 @@ afterEach(() => {
 });
 
 describe("ContextEngine", () => {
+  it("sends explicit retry intent and preserves content while restarting the album", async () => {
+    const { engine, fetch, send, resolve } = setup();
+    engine.onTrack(trackA);
+    await resolve(0, partial());
+    engine.rearm(trackA, true);
+    expect(fetch.mock.calls[1]?.[2]).toBe(true);
+    expect(send.mock.lastCall?.[0].context).toEqual(featuredContext);
+    await resolve(1, { status: "ok", body: { status: "queued" } });
+    expect(send.mock.lastCall?.[0].context).toEqual(featuredContext);
+    vi.advanceTimersByTime(2500);
+    expect(fetch.mock.calls[2]?.[2]).toBe(false);
+  });
   it("issues at most one request for the same track", () => {
     const { engine, fetch } = setup();
     engine.onTrack(trackA);
@@ -107,6 +121,33 @@ describe("ContextEngine", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     await resolve(0, ready());
     expect(statuses(send)).toEqual(["loading", "ready"]);
+  });
+
+  it("re-requests the same album on rearm (sign-in)", () => {
+    const { engine, fetch } = setup();
+    engine.onTrack(trackA);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // rearm bypasses the active-track-key guard so sign-in re-requests the album.
+    engine.rearm(trackA);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps published content when the job fails", async () => {
+    const { engine, send, resolve } = setup();
+    engine.onTrack(trackA);
+    await resolve(0, {
+      status: "ok",
+      body: {
+        status: "failed",
+        stage: "build_consensus",
+        context: featuredContext,
+      },
+    });
+    expect(send).toHaveBeenLastCalledWith({
+      status: "failed",
+      stage: "build_consensus",
+      context: featuredContext,
+    });
   });
 
   it("drops a stale response after a track change", async () => {
@@ -164,7 +205,7 @@ describe("ContextEngine", () => {
     expect(fetch).toHaveBeenCalledTimes(4);
   });
 
-  it("keeps partial content instead of replacing it with an error", async () => {
+  it("keeps partial content and exits loading when network retries exhaust", async () => {
     const { engine, fetch, send, resolve } = setup();
     engine.onTrack(trackA);
     await resolve(0, partial());
@@ -173,7 +214,8 @@ describe("ContextEngine", () => {
       vi.advanceTimersByTime(2500);
       await resolve(i, { status: "network-error" });
     }
-    expect(statuses(send)).toEqual(["loading", "partial"]);
+    expect(statuses(send)).toEqual(["loading", "partial", "error"]);
+    expect(send.mock.lastCall?.[0].context).toEqual(featuredContext);
     expect(fetch).toHaveBeenCalledTimes(5); // initial + 4 (one initial + maxRetries)
   });
 

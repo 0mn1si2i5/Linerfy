@@ -181,13 +181,15 @@ button {
 
 .track-title {
   margin: 0;
+  display: -webkit-box;
   overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--text);
   font-size: 26px;
   font-weight: 800;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .playback-row {
@@ -212,17 +214,32 @@ button {
 .seek-bar {
   flex: 1;
   min-width: 0;
-  height: 4px;
+  height: 16px;
   margin: 0;
-  border-radius: 999px;
   appearance: none;
-  background: var(--raised);
+  background: transparent;
   cursor: pointer;
+}
+
+/* A 16px hit area keeps the click/seek target generous without thickening the
+   visible 4px track. The filled segment up to `--seek-fill` is drawn by the
+   renderer as a CSS variable so the "played" portion stays accurate. */
+.seek-bar::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--seek-fill, 0%),
+    var(--raised) var(--seek-fill, 0%),
+    var(--raised) 100%
+  );
 }
 
 .seek-bar::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
+  margin-top: -4px;
   border-radius: 50%;
   appearance: none;
   background: var(--text);
@@ -271,6 +288,13 @@ button {
   height: 18px;
 }
 
+.playback-error {
+  margin: 8px 0 0;
+  color: #f15e6c;
+  font-size: 11px;
+  text-align: center;
+}
+
 .context {
   padding: 16px;
 }
@@ -283,9 +307,45 @@ button {
 }
 
 .context-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin: 10px 0 0;
   color: var(--muted);
   font-size: 11px;
+}
+
+.context-status-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px;
+}
+
+.context-status-wrap .context-status {
+  flex: 1;
+  margin: 0;
+}
+
+.retry-button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #000000;
+  background: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.retry-button:hover {
+  background: #ffffff;
+}
+
+.retry-button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .context-card {
@@ -316,6 +376,39 @@ button {
   font-size: 11px;
 }
 
+.rating-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  margin: 10px 0 0;
+  list-style: none;
+}
+
+.rating-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--raised);
+  font-size: 11px;
+}
+
+.rating-provider {
+  font-weight: 600;
+}
+
+.rating-value {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.rating-note {
+  opacity: 0.75;
+}
+
 .claim-list {
   padding: 0;
   margin: 0;
@@ -344,15 +437,14 @@ button {
   line-height: 1.5;
 }
 
-.source-summary-grid,
-.source-grid {
+.source-summary-grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 6px;
 }
 
 .source-summary,
-.source-card {
+.provider-card {
   padding: 13px;
   border-radius: 6px;
   background: var(--raised);
@@ -385,17 +477,56 @@ button {
   font-weight: 600;
 }
 
-.source-card h3 {
-  margin: 12px 0 7px;
+.provider-doc {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.provider-doc-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.provider-doc h3 {
+  margin: 0;
   font-size: 13px;
   line-height: 1.35;
 }
 
-.source-card > p {
-  margin: 0;
+.excerpt,
+.license-details {
+  margin-top: 10px;
+}
+
+.excerpt summary,
+.license-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.excerpt p {
+  margin: 6px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.license-details {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.license-attribution {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .source-link {
@@ -414,8 +545,7 @@ button {
 }
 
 @media (min-width: 680px) {
-  .context .source-summary-grid,
-  .context .source-grid {
+  .context .source-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

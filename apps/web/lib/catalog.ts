@@ -59,6 +59,7 @@ export async function getContextBySlug(slug: string): Promise<ContextResult> {
   const [
     artistResult,
     genresResult,
+    ratingsResult,
     sourcesResult,
     documentsResult,
     summaryRunsResult,
@@ -70,6 +71,7 @@ export async function getContextBySlug(slug: string): Promise<ContextResult> {
       .eq("id", release.artist_id)
       .maybeSingle(),
     supabase.from("genres").select("*").eq("release_id", releaseId),
+    supabase.from("release_ratings").select("*").eq("release_id", releaseId),
     supabase.from("review_sources").select("*"),
     supabase.from("review_documents").select("*").eq("release_id", releaseId),
     supabase
@@ -83,6 +85,7 @@ export async function getContextBySlug(slug: string): Promise<ContextResult> {
   const firstPhase = [
     artistResult,
     genresResult,
+    ratingsResult,
     sourcesResult,
     documentsResult,
     summaryRunsResult,
@@ -124,6 +127,7 @@ export async function getContextBySlug(slug: string): Promise<ContextResult> {
     releases: [release],
     genres: genresResult.data ?? [],
     genre_sources: genreSourcesResult.data ?? [],
+    release_ratings: ratingsResult.data ?? [],
     review_sources: sourcesResult.data ?? [],
     review_documents: documentsResult.data ?? [],
     review_excerpts: excerptsResult.data ?? [],

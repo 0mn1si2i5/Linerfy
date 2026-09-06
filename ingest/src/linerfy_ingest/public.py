@@ -130,6 +130,18 @@ def to_public(context: IngestedContext) -> dict:
             {"name": genre.name, "sourceIds": genre.source_ids}
             for genre in context.genres
         ],
+        "ratings": [
+            _omit_none(
+                {
+                    "provider": rating.provider,
+                    "value": rating.value,
+                    "scale": rating.scale,
+                    "voteCount": rating.vote_count,
+                    "sourceUrl": rating.source_url,
+                }
+            )
+            for rating in context.ratings
+        ],
         "sources": sources,
         "excerpts": excerpts,
         "sourceSummaries": source_summaries,

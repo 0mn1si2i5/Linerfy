@@ -73,6 +73,12 @@ class ReviewDocument(BaseModel):
     score_scale: int | None = Field(default=None, gt=0)
     public_excerpt: str = Field(min_length=1)
     content: str | None = None
+    # Document-level license: the license this specific document is stored under.
+    # Source-level SourcePolicy describes access/retention rules; a document may
+    # carry its own license (e.g. per-review CritiqueBrainz licensing), which is
+    # what the license pool for summarization is keyed on.
+    license_id: str = Field(min_length=1)
+    license_url: str = Field(min_length=1)
     policy: SourcePolicy
 
     @model_validator(mode="after")
@@ -82,6 +88,24 @@ class ReviewDocument(BaseModel):
         if len(self.public_excerpt) > self.policy.excerpt_max_chars:
             raise ValueError("public excerpt exceeds the source policy limit")
         return self
+
+
+class Rating(BaseModel):
+    """A release-level rating snapshot from one provider.
+
+    ``value``/``scale`` preserve the provider's own scale (MusicBrainz and
+    CritiqueBrainz both rate 0–5); ``vote_count`` is the official population
+    count and stays ``None`` when unknown (never written as 0). A rating is
+    independent of any review document, so a score-only source still surfaces.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1)
+    value: float = Field(ge=0)
+    scale: int = Field(gt=0)
+    vote_count: int | None = None
+    source_url: str = Field(min_length=1)
 
 
 class CitedClaim(BaseModel):
@@ -142,6 +166,7 @@ class IngestedContext(BaseModel):
     sources: list[ReviewSource]
     review_documents: list[ReviewDocument]
     genres: list[Genre] = Field(default_factory=list)
+    ratings: list[Rating] = Field(default_factory=list)
     summaries: list[Summary] = Field(default_factory=list)
 
     @model_validator(mode="after")

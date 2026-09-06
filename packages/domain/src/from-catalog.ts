@@ -96,11 +96,22 @@ export interface RecordingRow {
   title: string;
 }
 
+export interface ReleaseRatingRow {
+  id: string;
+  release_id: string;
+  provider: string;
+  value: number | null;
+  scale: number | null;
+  vote_count: number | null;
+  source_url: string | null;
+}
+
 export interface CatalogRows {
   artists: ArtistRow[];
   releases: ReleaseRow[];
   genres: GenreRow[];
   genre_sources: GenreSourceRow[];
+  release_ratings: ReleaseRatingRow[];
   review_sources: ReviewSourceRow[];
   review_documents: ReviewDocumentRow[];
   review_excerpts: ReviewExcerptRow[];
@@ -175,6 +186,22 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
         .filter((gs) => gs.genre_id === g.id)
         .map((gs) => docByUuid.get(gs.document_id)?.slug)
         .filter((slug): slug is string => Boolean(slug)),
+    }));
+
+  // Rating snapshots are release-level and independent of review documents; a
+  // rating with no value/scale is a bad row and is dropped rather than shown as
+  // a placeholder number.
+  const ratings = catalog.release_ratings
+    .filter(
+      (r) =>
+        r.release_id === release.id && r.value !== null && r.scale !== null,
+    )
+    .map((r) => ({
+      provider: r.provider,
+      value: r.value as number,
+      scale: r.scale as number,
+      ...(r.vote_count !== null ? { voteCount: r.vote_count } : {}),
+      ...(r.source_url ? { sourceUrl: r.source_url } : {}),
     }));
 
   // Only the current published generation per scope is public. Immutable
@@ -260,9 +287,9 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
       id: release.slug,
       title: release.title,
       artistId: artist.slug,
-      year: release.release_date
-        ? Number(release.release_date.slice(0, 4))
-        : new Date().getUTCFullYear(),
+      ...(release.release_date
+        ? { year: Number(release.release_date.slice(0, 4)) }
+        : {}),
       ...(release.artwork_url ? { artworkUrl: release.artwork_url } : {}),
     },
     recordings: catalog.recordings
@@ -274,6 +301,7 @@ export function assembleMusicContext(catalog: CatalogRows): MusicContext {
         providerIds: {},
       })),
     genres,
+    ratings,
     sources,
     excerpts,
     sourceSummaries,

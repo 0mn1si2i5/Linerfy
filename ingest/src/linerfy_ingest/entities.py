@@ -56,8 +56,14 @@ COVER_ART_POLICY = MetadataSourcePolicy(
 
 
 @dataclass(frozen=True)
-class MusicBrainzTag:
-    """A user-supplied MusicBrainz tag and its vote count (relevance weight)."""
+class MusicBrainzGenre:
+    """A MusicBrainz genre and its vote count (relevance weight).
+
+    MusicBrainz's curated ``genres`` list is distinct from the user-supplied
+    ``tags`` folksonomy: genres are maintained and voted on, so they are the
+    appropriate source for a public genre label (tags carry provenance noise
+    like languages, regions, eras and chart positions).
+    """
 
     name: str
     count: int = 0
@@ -72,7 +78,7 @@ class ReleaseGroup:
     artist: str
     score: int | None = None
     first_release_date: str | None = None
-    tags: tuple[MusicBrainzTag, ...] = ()
+    genres: tuple[MusicBrainzGenre, ...] = ()
     rating: float | None = None
     rating_votes: int = 0
     artwork_url: str | None = None

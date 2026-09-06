@@ -75,8 +75,9 @@ def rls_ids():
         ):
             conn.execute(
                 "INSERT INTO public.review_documents "
-                "(id, slug, release_id, source_id, source_url, title, content_fingerprint, status) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                "(id, slug, release_id, source_id, source_url, title, license_id, "
+                " license_url, content_fingerprint, status) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     ids[key],
                     slug,
@@ -84,6 +85,8 @@ def rls_ids():
                     ids["source"],
                     f"https://example.com/{slug}",
                     slug.replace("-", " ").title(),
+                    "proprietary",
+                    "https://example.com/license",
                     f"fingerprint-{slug}",
                     status,
                 ),
@@ -95,8 +98,9 @@ def rls_ids():
         )
         conn.execute(
             "INSERT INTO public.review_documents "
-            "(id, slug, release_id, source_id, source_url, title, content_fingerprint, status) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            "(id, slug, release_id, source_id, source_url, title, license_id, "
+            " license_url, content_fingerprint, status) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 ids["second_doc"],
                 "rls-second-doc",
@@ -104,6 +108,8 @@ def rls_ids():
                 ids["source"],
                 "https://example.com/rls-second-doc",
                 "RLS Second Doc",
+                "proprietary",
+                "https://example.com/license",
                 "fingerprint-rls-second-doc",
                 "published",
             ),

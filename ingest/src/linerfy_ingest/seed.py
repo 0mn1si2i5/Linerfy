@@ -30,7 +30,7 @@ def _scope_key(summary: Summary) -> str:
     if summary.kind == "consensus":
         return f"consensus::{summary.license_pool}"
     scope = summary.source_id or summary.license_pool or "unscoped"
-    return f"source::{scope}"
+    return f"source::{scope}::{summary.license_pool}"
 
 
 def _fingerprint(document: ReviewDocument) -> str:
@@ -129,6 +129,8 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
             else None,
             "score": document.score,
             "score_scale": document.score_scale,
+            "license_id": document.license_id,
+            "license_url": document.license_url,
             "content_fingerprint": _fingerprint(document),
             "status": "published",
         }
@@ -221,6 +223,19 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
         for source_id in genre.source_ids
     ]
 
+    release_ratings = [
+        {
+            "id": stable_uuid("rating", f"{context.release.id}:{rating.provider}"),
+            "release_id": release_id,
+            "provider": rating.provider,
+            "value": rating.value,
+            "scale": rating.scale,
+            "vote_count": rating.vote_count,
+            "source_url": rating.source_url,
+        }
+        for rating in context.ratings
+    ]
+
     return {
         "artists": artists,
         "releases": releases,
@@ -231,6 +246,7 @@ def to_rows(context: IngestedContext) -> dict[str, list[dict]]:
         "review_document_bodies": review_document_bodies,
         "review_excerpts": review_excerpts,
         "genre_sources": genre_sources,
+        "release_ratings": release_ratings,
         "summary_runs": summary_runs,
         "claims": claims,
         "claim_sources": claim_sources,

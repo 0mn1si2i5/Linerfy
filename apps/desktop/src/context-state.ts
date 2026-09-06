@@ -23,9 +23,9 @@ export type ContextState =
     }
   | { status: "unavailable" }
   | { status: "ambiguous" }
-  | { status: "failed" }
+  | { status: "failed"; stage?: string; context?: MusicContext }
   | { status: "ready"; context: MusicContext }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; context?: MusicContext };
 
 export type { ContextApiResponse };
 
@@ -86,10 +86,12 @@ export function parseContextApiResponse(input: unknown): ContextApiResponse {
 }
 
 /**
- * A stable key for detecting a change in the playing track. The separator is a
- * NUL byte so real field values can never collide across boundaries.
+ * A stable key for detecting a change in the *album* being enriched. It is
+ * album identity only — provider + artist + album — and deliberately excludes
+ * the track's `providerUrl`, so moving to the next track on the same album
+ * keeps the already-loaded reviews instead of resetting the context request.
+ * The separator is a NUL byte so real field values can never collide.
  */
 export function trackKey(track: NowPlayingTrack): string {
-  const base = `${track.provider}\u0000${track.artist}\u0000${track.album}`;
-  return track.providerUrl ? `${base}\u0000${track.providerUrl}` : base;
+  return `${track.provider}\u0000${track.artist}\u0000${track.album}`;
 }

@@ -8,7 +8,7 @@ import urllib.error
 import pytest
 
 import linerfy_ingest.musicbrainz as musicbrainz_module
-from linerfy_ingest.entities import MusicBrainzTag
+from linerfy_ingest.entities import MusicBrainzGenre
 from linerfy_ingest.musicbrainz import (
     MATCH_THRESHOLD,
     MusicBrainzAdapter,
@@ -39,7 +39,7 @@ _LOOKUP_PAYLOAD = {
     "title": "Norman Fucking Rockwell!",
     "first-release-date": "2019-08-30",
     "artist-credit": [{"name": "Lana Del Rey", "joinphrase": ""}],
-    "tags": [{"name": "art pop", "count": 12}, {"name": "baroque pop", "count": 8}],
+    "genres": [{"name": "art pop", "count": 12}, {"name": "baroque pop", "count": 8}],
     "rating": {"value": 4.2, "votes-count": 87},
 }
 
@@ -73,11 +73,11 @@ def test_search_parses_release_groups() -> None:
     assert results[0].score == 100
 
 
-def test_lookup_enriches_tags_and_rating() -> None:
+def test_lookup_enriches_genres_and_rating() -> None:
     group = _fake().get_release_group("rg-nfr")
-    assert group.tags == (
-        MusicBrainzTag(name="art pop", count=12),
-        MusicBrainzTag(name="baroque pop", count=8),
+    assert group.genres == (
+        MusicBrainzGenre(name="art pop", count=12),
+        MusicBrainzGenre(name="baroque pop", count=8),
     )
     assert group.rating == 4.2
     assert group.rating_votes == 87
@@ -89,7 +89,9 @@ def test_resolve_matches_a_high_score_release_group() -> None:
     assert result.status == "matched"
     assert result.release_group is not None
     assert result.release_group.mbid == "rg-nfr"
-    assert result.release_group.rating_votes == 87
+    # The resolver returns the search result; it does not pay for the enriched
+    # detail lookup (tags/rating) that only the fetch stage consumes.
+    assert result.release_group.rating_votes == 0
 
 
 def test_resolve_refuses_a_low_score_result() -> None:
@@ -101,6 +103,34 @@ def test_resolve_refuses_a_low_score_result() -> None:
     assert result.status == "unreliable"
     assert result.release_group is None
     assert result.reason is not None and str(MATCH_THRESHOLD) in result.reason
+
+
+def test_resolve_refuses_a_score_tie_across_distinct_groups() -> None:
+    # Two different release groups with the same top score: ranking alone cannot
+    # disambiguate, so the resolver must refuse instead of trusting the first.
+    payload = {
+        "search": {
+            "release-groups": [
+                {
+                    "id": "rg-a",
+                    "title": "Greatest Hits",
+                    "score": 100,
+                    "artist-credit": [{"name": "Artist A", "joinphrase": ""}],
+                },
+                {
+                    "id": "rg-b",
+                    "title": "Greatest Hits",
+                    "score": 100,
+                    "artist-credit": [{"name": "Artist B", "joinphrase": ""}],
+                },
+            ]
+        },
+        "lookup": _LOOKUP_PAYLOAD,
+    }
+    result = resolve_release_group("Somebody", "Greatest Hits", FakeMB(payload))
+    assert result.status == "unreliable"
+    assert result.release_group is None
+    assert result.reason == "multiple release groups share the top score"
 
 
 def test_resolve_reports_not_found_without_candidates() -> None:

@@ -10,12 +10,15 @@ transaction -- there is no release-wide publish stage.
 
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from .critiquebrainz import CritiqueBrainzAdapter
-from .db import connect, seed
+from .db import connect, delete_metadata_genres, seed
 from .enrich import corpus_from_documents, fetch_documents_parallel, genres_from_release_group
 from .jobs import (
     EnrichmentJob,
@@ -29,12 +32,14 @@ from .jobs import (
 from .models import (
     ArtistEntity,
     IngestedContext,
+    Rating,
     ReleaseEntity,
     license_pool,
 )
 from .musicbrainz import MusicBrainzAdapter, resolve_release_group
 from .providers import ChatResult
 from .request import NowPlayingRequest
+from .seed import stable_uuid
 from .summarize import (
     StoredDocument,
     corpus_hash,
@@ -59,7 +64,18 @@ class PipelineDeps:
 
 
 def _slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-") or "unknown"
+    """A readable, collision-free slug; identical to apps/web/lib/request.ts.
+
+    A readable ASCII slug is only safe when the name is entirely ASCII:
+    otherwise stripping non-ASCII letters (accented Latin, CJK, …) collapses
+    distinct names onto the same slug — the "unknown-unknown" collision that
+    made 周杰伦/范特西 and 王菲/寓言 share one release. Non-ASCII names hash
+    their NFC-normalized form instead, so identity stays lossless.
+    """
+    if text.isascii():
+        return re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-") or "unknown"
+    normalized = unicodedata.normalize("NFC", text)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
 
 
 def _release_slug(request: NowPlayingRequest) -> str:
@@ -84,6 +100,23 @@ def _release_for(request: NowPlayingRequest, release_group) -> ReleaseEntity:
         artist_id=_slugify(request.artist),
         year=_first_release_year(release_group.first_release_date),
         artwork_url=release_group.artwork_url,
+    )
+
+
+def _musicbrainz_rating(mbid: str, release_group) -> Rating | None:
+    """The MusicBrainz rating snapshot, on MusicBrainz's own 0–5 scale.
+
+    ``rating`` is the community average and ``rating_votes`` its population
+    count; when the release group has no rating there is no snapshot at all.
+    """
+    if release_group.rating is None:
+        return None
+    return Rating(
+        provider="musicbrainz",
+        value=release_group.rating,
+        scale=5,
+        vote_count=release_group.rating_votes or None,
+        source_url=f"https://musicbrainz.org/release-group/{mbid}",
     )
 
 
@@ -112,35 +145,61 @@ def _fetch_sources(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> boo
     release = _release_for(request, release_group)
     artist = ArtistEntity(id=release.artist_id, name=request.artist)
     genres = genres_from_release_group(release_group)
+    mb_rating = _musicbrainz_rating(mbid, release_group)
 
-    # Persist the MusicBrainz entity and genres immediately, before the slower
-    # source fetches, so title/year/genres show as early as possible.
+    # Persist the MusicBrainz entity, genres, and rating immediately, before the
+    # slower source fetches, so title/year/genres/rating show as early as
+    # possible.
     entity = IngestedContext(
-        release=release, artist=artist, sources=[], review_documents=[], genres=genres
+        release=release,
+        artist=artist,
+        sources=[],
+        review_documents=[],
+        genres=genres,
+        ratings=[mb_rating] if mb_rating else [],
     )
     with connect(autocommit=False) as conn:
         assert_active_lease(conn, job.id, lease_id)
+        # Replace the previous metadata genre set (uncited) so a re-fetch drops
+        # stale tag-based genres instead of accumulating them next to the new
+        # curated genres.
+        delete_metadata_genres(conn, uuid.UUID(stable_uuid("release", release.id)))
         seed(conn, entity)
         conn.commit()
 
     # Fetch CritiqueBrainz and Wikipedia in parallel; persist each source's
-    # documents as its request completes, so a fast source is not held up by a
-    # slow one. Every write re-checks the active lease, so an expired worker can
-    # neither overwrite review documents nor record the corpus it fetched.
+    # documents and rating as its request completes, so a fast source is not
+    # held up by a slow one. Every write re-checks the active lease, so an
+    # expired worker can neither overwrite review documents nor record the
+    # corpus it fetched.
     all_documents = []
-    for source, documents in fetch_documents_parallel(
+    source_errors = []
+    for result in fetch_documents_parallel(
         release_group, release, release.title, deps.critiquebrainz, deps.wikipedia
     ):
-        if not documents:
+        if result.error:
+            source_errors.append(f"{result.source.id}:{result.error}")
+        if not result.documents and not result.rating:
             continue
-        all_documents.extend(documents)
+        all_documents.extend(result.documents)
         partial = IngestedContext(
-            release=release, artist=artist, sources=[source], review_documents=documents
+            release=release,
+            artist=artist,
+            sources=[result.source] if result.documents else [],
+            review_documents=result.documents,
+            ratings=[result.rating] if result.rating else [],
         )
         with connect(autocommit=False) as conn:
             assert_active_lease(conn, job.id, lease_id)
             seed(conn, partial)
             conn.commit()
+
+    # A fetch where every source failed is a transient failure worth retrying,
+    # distinct from "every source genuinely has no coverage" (empty corpus). Only
+    # the former raises; an empty-but-successful corpus falls through to the
+    # summary stage, which marks the job unavailable.
+    if not all_documents and source_errors:
+        raise RuntimeError("all sources failed to fetch: " + ", ".join(source_errors))
 
     # Record the corpus hash once every document is in.
     with connect(autocommit=False) as conn:
@@ -148,14 +207,22 @@ def _fetch_sources(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> boo
         record_corpus_hash(
             conn, job.id, lease_id, corpus_hash(corpus_from_documents(all_documents))
         )
+        conn.execute(
+            "UPDATE public.enrichment_jobs SET source_errors = %s WHERE id = %s",
+            (source_errors, job.id),
+        )
         conn.commit()
     return True
 
 
-def _group_by_source(documents: list[StoredDocument]) -> dict[str, list[StoredDocument]]:
-    grouped: dict[str, list[StoredDocument]] = {}
+def _group_by_source(
+    documents: list[StoredDocument],
+) -> dict[tuple[str, str], list[StoredDocument]]:
+    grouped: dict[tuple[str, str], list[StoredDocument]] = {}
     for document in documents:
-        grouped.setdefault(document.source_id, []).append(document)
+        grouped.setdefault((document.source_id, license_pool(document.license_id)), []).append(
+            document
+        )
     return grouped
 
 
@@ -166,7 +233,7 @@ def _group_by_pool(documents: list[StoredDocument]) -> dict[str, list[StoredDocu
     return grouped
 
 
-def _existing_source_summaries(conn, release_slug: str) -> dict[str, str]:
+def _existing_source_summaries(conn, release_slug: str) -> dict[tuple[str, str], str]:
     """Map source id -> corpus_hash of the current published summary.
 
     A source is only treated as "done" when its published generation was built
@@ -174,13 +241,13 @@ def _existing_source_summaries(conn, release_slug: str) -> dict[str, str]:
     than a permanent skip.
     """
     rows = conn.execute(
-        "SELECT source_id, corpus_hash FROM public.summary_runs s "
+        "SELECT source_id, license_pool, corpus_hash FROM public.summary_runs s "
         "JOIN public.releases r ON r.id = s.release_id "
         "WHERE r.slug = %s AND s.summary_kind = 'source' "
         "AND s.status = 'published'",
         (release_slug,),
     ).fetchall()
-    return {row[0]: row[1] for row in rows if row[0]}
+    return {(row[0], row[1]): row[2] for row in rows if row[0]}
 
 
 def _existing_consensus_pools(conn, release_slug: str) -> dict[str, str]:
@@ -202,10 +269,10 @@ def _build_source_summaries(job: EnrichmentJob, lease_id: str, deps: PipelineDep
         documents = read_stored_documents(conn, slug)
         done = _existing_source_summaries(conn, slug)
     if not documents:
-        raise JobUnavailable("no persisted documents to summarize")
+        return True
     by_source = _group_by_source(documents)
-    for source_id, source_documents in by_source.items():
-        if done.get(source_id) == corpus_hash(_as_corpus(source_documents)):
+    for (source_id, pool), source_documents in by_source.items():
+        if done.get((source_id, pool)) == corpus_hash(_as_corpus(source_documents)):
             continue
         # One bounded model call per source, outside any transaction. Renew the
         # lease first so a long model call cannot be reaped mid-stage.
@@ -236,7 +303,7 @@ def _build_consensus(job: EnrichmentJob, lease_id: str, deps: PipelineDeps) -> b
         documents = read_stored_documents(conn, slug)
         done = _existing_consensus_pools(conn, slug)
     if not documents:
-        raise JobUnavailable("no persisted documents for consensus")
+        return True
     by_pool = _group_by_pool(documents)
     for pool, pool_documents in by_pool.items():
         pool_hash = corpus_hash(_as_corpus(pool_documents))

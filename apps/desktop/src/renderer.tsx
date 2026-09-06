@@ -2,6 +2,7 @@ import { MusicContextCard } from "@linerfy/ui";
 import type { NowPlayingTrack } from "@linerfy/now-playing";
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { StrictMode, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { LoginState } from "./auth-state";
@@ -30,6 +31,8 @@ function DesktopApp() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [context, setContext] = useState<ContextState>({ status: "idle" });
   const [scrubPosition, setScrubPosition] = useState<number | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -77,25 +80,82 @@ function DesktopApp() {
   }
 
   const playingTrack = view.kind === "playing" ? view.track : null;
-  const releaseYear =
+  // `failed` still carries whatever was published before the failure; show it
+  // rather than dropping already-delivered content.
+  const contentContext =
     context.status === "ready" || context.status === "partial"
-      ? context.context.release.year
-      : null;
+      ? context.context
+      : (context.status === "failed" || context.status === "error") &&
+          context.context
+        ? context.context
+        : null;
+  const releaseYear = contentContext?.release.year ?? null;
   const contextLabel = playingTrack
     ? contextStatusLabel(auth.status, context)
     : null;
+  const isFailed = context.status === "failed" || context.status === "error";
 
   const durationMs = playingTrack?.durationMs;
   const positionMs = playingTrack?.positionMs;
   const showProgress = durationMs !== undefined && positionMs !== undefined;
   const scrubValue = scrubPosition ?? positionMs ?? 0;
+  const seekPercent =
+    showProgress && durationMs !== undefined && durationMs > 0
+      ? Math.min(100, Math.max(0, (scrubValue / durationMs) * 100))
+      : 0;
 
-  function commitSeek() {
-    if (scrubPosition !== null) {
-      void window.linerfy.seekTo(scrubPosition);
-      setScrubPosition(null);
+  // A stable *track* identity (not album) so an uncommitted seek drag is cleared
+  // the moment the track changes, while a now-playing poll for the same track
+  // does not wipe it.
+  const trackId = playingTrack
+    ? `${playingTrack.provider}\u0000${playingTrack.artist}\u0000${playingTrack.title}`
+    : null;
+  useEffect(() => {
+    setScrubPosition(null);
+  }, [trackId]);
+
+  async function handleRetry() {
+    setRetrying(true);
+    try {
+      await window.linerfy.retryContext();
+    } finally {
+      setRetrying(false);
     }
   }
+
+  // A brief failure note for playback/seek; consecutive clicks are only
+  // suppressed by the promise, no player state machine is introduced.
+  async function runControl(action: () => Promise<void>, label: string) {
+    setPlaybackError(null);
+    try {
+      await action();
+    } catch {
+      setPlaybackError(`${label}失败`);
+    }
+  }
+
+  async function commitSeek() {
+    if (scrubPosition === null) return;
+    const target = scrubPosition;
+    setScrubPosition(null);
+    setPlaybackError(null);
+    try {
+      await window.linerfy.seekTo(target);
+    } catch {
+      setPlaybackError("跳转失败");
+    }
+  }
+
+  const retryButton = (
+    <button
+      className="retry-button"
+      type="button"
+      disabled={retrying}
+      onClick={() => void handleRetry()}
+    >
+      {retrying ? "重试中…" : "重试"}
+    </button>
+  );
 
   return (
     <main className="companion">
@@ -159,7 +219,9 @@ function DesktopApp() {
             </div>
           </section>
           <section className="current-track" aria-label="当前曲目">
-            <p className="track-title">{playingTrack.title}</p>
+            <p className="track-title" title={playingTrack.title}>
+              {playingTrack.title}
+            </p>
             {showProgress ? (
               <div className="playback-row">
                 <span className="track-time">{formatTime(scrubValue)}</span>
@@ -169,11 +231,16 @@ function DesktopApp() {
                   min={0}
                   max={durationMs}
                   value={scrubValue}
+                  style={
+                    {
+                      "--seek-fill": `${seekPercent}%`,
+                    } as CSSProperties
+                  }
                   onChange={(event) =>
                     setScrubPosition(Number(event.target.value))
                   }
-                  onPointerUp={commitSeek}
-                  onKeyUp={commitSeek}
+                  onPointerUp={() => void commitSeek()}
+                  onKeyUp={() => void commitSeek()}
                   aria-label="播放进度"
                 />
                 <span className="track-time">{formatTime(durationMs)}</span>
@@ -184,7 +251,9 @@ function DesktopApp() {
                 className="transport-button"
                 type="button"
                 aria-label="上一首"
-                onClick={() => void window.linerfy.previous()}
+                onClick={() =>
+                  void runControl(() => window.linerfy.previous(), "上一首")
+                }
               >
                 <SkipBack aria-hidden="true" />
               </button>
@@ -192,7 +261,12 @@ function DesktopApp() {
                 className="transport-button primary"
                 type="button"
                 aria-label={playingTrack.state === "playing" ? "暂停" : "播放"}
-                onClick={() => void window.linerfy.togglePlayback()}
+                onClick={() =>
+                  void runControl(
+                    () => window.linerfy.togglePlayback(),
+                    "播放/暂停",
+                  )
+                }
               >
                 {playingTrack.state === "playing" ? (
                   <Pause aria-hidden="true" />
@@ -204,36 +278,54 @@ function DesktopApp() {
                 className="transport-button"
                 type="button"
                 aria-label="下一首"
-                onClick={() => void window.linerfy.next()}
+                onClick={() =>
+                  void runControl(() => window.linerfy.next(), "下一首")
+                }
               >
                 <SkipForward aria-hidden="true" />
               </button>
             </div>
+            {playbackError ? (
+              <p className="playback-error" role="status">
+                {playbackError}
+              </p>
+            ) : null}
           </section>
         </>
       ) : null}
 
-      {auth.status === "signed-in" &&
-      (context.status === "ready" || context.status === "partial") ? (
+      {auth.status === "signed-in" && contentContext ? (
         <div className="context">
           <p className="album-review-note">专辑评价</p>
           <MusicContextCard
-            context={context.context}
+            context={contentContext}
             showReleaseHeader={false}
           />
-          {context.status === "partial" ? (
-            <p className="context-progress" aria-live="polite">
-              {stageLabel(context.stage)}
-            </p>
+          {context.status === "partial" || isFailed ? (
+            <div className="context-progress" aria-live="polite">
+              <span>
+                {isFailed
+                  ? context.status === "error"
+                    ? `${context.message}，已保留已加载内容`
+                    : "获取未完成，已保留已加载内容"
+                  : context.status === "partial"
+                    ? `${stageLabel(context.stage)}${context.paused ? "（服务暂停）" : "…"}`
+                    : ""}
+              </span>
+              {isFailed ? retryButton : null}
+            </div>
           ) : null}
         </div>
       ) : contextLabel ? (
-        <p
-          className={`context-status ${context.status === "error" ? "error" : "muted"}`}
-          aria-live="polite"
-        >
-          {contextLabel}
-        </p>
+        <div className="context-status-wrap">
+          <p
+            className={`context-status ${context.status === "error" ? "error" : "muted"}`}
+            aria-live="polite"
+          >
+            {contextLabel}
+          </p>
+          {isFailed ? retryButton : null}
+        </div>
       ) : null}
     </main>
   );

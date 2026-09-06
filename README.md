@@ -14,9 +14,9 @@ v1 ships no search, content home, recommendations, favorites, social features, c
 
 ## 形态 / Shape
 
-- **macOS companion**（`apps/desktop`）：菜单栏 popover 与全局快捷键打开，读取当前播放、完成 GitHub OAuth 登录，并展示完整语境（曲风/标签/评分/单来源总结/综合观点/引用/链接）。
-- **Vercel API**（`apps/web`）：已认证 API（`POST /api/context` 在线创建任务 + `/api/context/[slug]` 读语境）、GitHub OAuth 回调、说明网页，以及受保护的 worker route（`/api/enrichment/run`，由 Supabase Cron 每分钟调用）。说明网页不读取当前播放，也不提供搜索。
-- **采集**（`ingest`）：实体匹配、许可来源、模型总结的批处理管线。
+- **macOS companion**（`apps/desktop`）：菜单栏与快捷键打开可移动、可缩放窗口，读取当前播放、登录、控制播放并展示专辑语境。Movable, resizable desktop window for login, current playback, playback controls and album context.
+- **Vercel API**（`apps/web`）：`POST /api/context` 负责认证后的任务创建、状态读取与显式重试；`/`、`/login`、`/auth/callback` 仅用于登录。Authenticated context API and login pages only.
+- **采集**（`ingest`）：独立 Vercel Python Function `/api/enrichment`，处理实体、来源和总结。新任务异步唤醒 worker，Supabase Cron 每分钟补偿；客户端轮询只读取状态。Separate Python worker, asynchronously woken for new jobs with cron recovery; desktop polling reads progress.
 - **存储**（`supabase/migrations`）：catalog、enrichment jobs 与行级权限。
 
 ## 正式数据来源 / Authorized sources
@@ -33,7 +33,8 @@ Guardian, Pitchfork, AOTY, Metacritic, RYM, Reddit, and other unlicensed or unau
 
 内容展示层级（从上到下）：当前播放与封面 → 曲风 → 相关标签 → 综合观点 → 各来源卡片 → 原文链接。Display order: now-playing + cover → genres → related tags → consensus → source cards → original links.
 
-- 综合观点仅在至少两个许可证兼容的来源之间合成；不兼容语料不混成一个派生总结。Consensus is synthesized only across license-compatible sources.
+- 综合观点仅在至少两个许可证兼容的来源之间合成；单来源总结也按文档许可分池，未知许可不猜测。Consensus requires two compatible sources; source summaries also stay within document-level license pools, with no assumed permission for unknown licenses.
+- 曲风、评分和已发布来源可先于总结显示。一个来源失败不清空已有内容，显式重试恢复原任务，不创建重复队列。Metadata, ratings and published sources appear progressively; failures preserve content and explicit retries resume the existing job.
 - 每条公开 claim 必须能追溯到已保存的 review document；全文永不公开，仅元数据、短摘录/转述与原文链接进入公开输出。Every public claim traces to a stored review document; full text is never public.
 - 评分保留原始量表与票数（少于 5 票标「样本较少」），不生成 Linerfy 自有综合分。Ratings keep their original scale and vote count; no Linerfy composite score.
 - track 无独立乐评时优先展示所属专辑资料并标「专辑乐评」；无法可靠匹配时显示原元数据与「无法可靠匹配」，不猜测、不写污染实体。Tracks without their own reviews fall back to album material labelled "album review"; unverifiable matches show the raw metadata and "unable to match" rather than guessing.
@@ -104,7 +105,10 @@ The unsigned Electron package is written to `apps/desktop/out/` for manual shari
 
 ## 当前状态 / Status
 
-> 以下标注依据 fresh 验证（测试 + 类型检查 + 构建 + 代码路径），不代表生产联调通过。
+当前流水线为 `resolve_entity → fetch_sources → build_source_summaries → build_consensus`，按来源和许可池原子发布。来源覆盖仍有限：Wikipedia 是背景资料，CritiqueBrainz 是社区评论，不能替代专业媒体乐评。缺少内容时不让模型补写。
 
-- **代码路径完成且有测试**：Supabase catalog 与 RLS（取消匿名读取）；公开说明页与已认证 `/context/[slug]`、service-role 仅在服务端；可追溯中文总结（模型边界、按 scope 原子发布、claim 引用）；多 provider 协议（OpenAI 兼容 + Anthropic）；许可证池隔离（CritiqueBrainz=CC BY-NC-SA 3.0、Wikipedia=CC BY-SA 4.0，各自成池不混）；可靠 100 元预算账本（按模型费率、预检 + 结算、未知模型 fail-closed）；DB 测试双重守卫与隔离实体；MusicBrainz/Wikidata/Cover Art Archive 实体适配器；CritiqueBrainz/Wikipedia Reception 语料适配器（含 SourcePolicy）；enrichment 四阶段真实 worker（`resolve_entity → fetch_sources → build_source_summaries → build_consensus`）与状态机、管理 CLI；在线任务创建与受保护 worker route；macOS 菜单栏 now-playing 识别、GitHub OAuth 登录、Keychain token 存储与完整 context 展示。
-- **生产基础设施与 Web OAuth 已联调**：生产 Supabase 迁移、Vercel Web/worker、Vault 与定时 worker 已配置；GitHub OAuth 的浏览器登录已于 2026-09-04 复验通过。桌面 OAuth 仍需用重新打包的 `.app` 做一次人工回环验证。
+The four-stage pipeline publishes atomically per source/license pool. Coverage remains limited: Wikipedia provides background and CritiqueBrainz community reviews, not professional media coverage. Missing reviews are never fabricated.
+
+本地测试通过不代表生产验收：发布时需分别核对迁移、Web/worker 实际部署、桌面包和真实登录/播放会话。Docker/Postgres 仅为可选的隔离测试环境，不是用户安装依赖。
+
+Local checks do not establish production readiness: verify migrations, both deployments, the packaged app and a real session separately. Docker/Postgres are optional isolated test tools, not installation requirements.

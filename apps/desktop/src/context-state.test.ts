@@ -28,9 +28,13 @@ describe("trackKey", () => {
     ).not.toBe(trackKey(track()));
   });
 
-  it("changes when the provider URL changes", () => {
-    expect(trackKey(track({ providerUrl: "spotify:track:1" }))).not.toBe(
-      trackKey(track({ providerUrl: "spotify:track:2" })),
+  it("stays the same across tracks on the same album", () => {
+    // Same album, different track (providerUrl/title) must share one key so the
+    // already-loaded reviews are kept instead of reset when the next track runs.
+    expect(
+      trackKey(track({ title: "Track 1", providerUrl: "spotify:track:1" })),
+    ).toBe(
+      trackKey(track({ title: "Track 2", providerUrl: "spotify:track:2" })),
     );
   });
 });

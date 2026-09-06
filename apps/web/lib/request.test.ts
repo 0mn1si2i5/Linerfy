@@ -79,6 +79,19 @@ describe("requestFingerprint", () => {
     );
     expect(a).not.toBe(b);
   });
+
+  it("does not collide across a field that contains the separator", () => {
+    // artist "a:b" / album "c" must not equal artist "a" / album "b:c".
+    const left = requestFingerprint(np({ artist: "a:b", album: "c" }));
+    const right = requestFingerprint(np({ artist: "a", album: "b:c" }));
+    expect(left).not.toBe(right);
+  });
+
+  it("keeps distinct non-ASCII albums distinct", () => {
+    const jay = requestFingerprint(np({ artist: "周杰伦", album: "范特西" }));
+    const faye = requestFingerprint(np({ artist: "王菲", album: "寓言" }));
+    expect(jay).not.toBe(faye);
+  });
 });
 
 describe("releaseSlug", () => {
@@ -90,6 +103,23 @@ describe("releaseSlug", () => {
 
   it("falls back to unknown for empty parts", () => {
     expect(releaseSlug("!!!", "   ")).toBe("unknown-unknown");
+  });
+
+  it("never collapses distinct non-ASCII names onto one slug", () => {
+    const jay = releaseSlug("周杰伦", "范特西");
+    const faye = releaseSlug("王菲", "寓言");
+    // Pinned values shared with ingest/tests/test_pipeline.py: both ends produce
+    // the identical slug, so the read path finds what the worker wrote.
+    expect(jay).toBe("d1d51d7a7c5c-a23acf6103d1");
+    expect(faye).toBe("b7e62df3267a-114fcb616f84");
+    expect(jay).not.toBe(faye);
+    expect(jay).not.toBe("unknown-unknown");
+  });
+
+  it("keeps distinct accented names distinct", () => {
+    expect(releaseSlug("Björk", "Homogenic")).not.toBe(
+      releaseSlug("Bjork", "Homogenic"),
+    );
   });
 });
 

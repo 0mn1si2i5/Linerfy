@@ -22,6 +22,7 @@ _TABLE_ORDER = [
     "artists",
     "releases",
     "genres",
+    "release_ratings",
     "review_sources",
     "source_policies",
     "review_documents",
@@ -40,6 +41,7 @@ _PRIMARY_KEYS = {
     "artists": ["id"],
     "releases": ["id"],
     "genres": ["id"],
+    "release_ratings": ["id"],
     "review_sources": ["id"],
     "source_policies": ["source_id"],
     "review_documents": ["id"],
@@ -56,7 +58,10 @@ def connect(*, autocommit: bool = True) -> psycopg.Connection:
     """Open a connection. Default is autocommit (one statement == one commit),
     used by the read path and one-shot seeding. Pass ``autocommit=False`` when a
     caller must control commit/rollback itself (e.g. an atomic summary write)."""
-    return psycopg.connect(os.environ["DATABASE_URL"], autocommit=autocommit)
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL is required")
+    return psycopg.connect(url, autocommit=autocommit)
 
 
 # The columns that are genuinely uuid-typed, per table. ``source_id`` is a uuid
@@ -67,6 +72,7 @@ _UUID_COLUMNS: dict[str, set[str]] = {
     "artists": {"id"},
     "releases": {"id", "artist_id"},
     "genres": {"id", "release_id"},
+    "release_ratings": {"id", "release_id"},
     "review_sources": {"id"},
     "source_policies": {"source_id"},
     "review_documents": {"id", "release_id", "source_id"},
@@ -98,6 +104,23 @@ def _release_present(conn: psycopg.Connection, rows: dict[str, list[dict]]) -> b
         conn.execute("SELECT 1 FROM public.releases WHERE id = %s", (release_id,)).fetchone()
         is not None
     )
+
+
+def delete_metadata_genres(conn: psycopg.Connection, release_id: uuid.UUID) -> int:
+    """Delete a release's uncited (metadata-owned) genres before re-seeding.
+
+    MusicBrainz genres carry no document citation; genres attributed to review
+    documents (which have ``genre_sources`` rows) are preserved. This makes a
+    re-fetch replace the previous metadata genre set instead of accumulating
+    stale tag-based genres alongside the new curated genres.
+    """
+    cursor = conn.execute(
+        "DELETE FROM public.genres g "
+        "WHERE g.release_id = %s "
+        "AND NOT EXISTS (SELECT 1 FROM public.genre_sources gs WHERE gs.genre_id = g.id)",
+        (release_id,),
+    )
+    return cursor.rowcount
 
 
 def seed(

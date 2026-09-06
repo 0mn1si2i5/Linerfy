@@ -18,6 +18,7 @@ export interface LinerfyDesktopBridge {
   signOut(): Promise<void>;
   onAuthStateChanged(callback: (state: LoginState) => void): () => void;
   onContextChanged(callback: (state: ContextState) => void): () => void;
+  retryContext(): Promise<void>;
 }
 
 contextBridge.exposeInMainWorld("linerfy", {
@@ -54,4 +55,5 @@ contextBridge.exposeInMainWorld("linerfy", {
     ipcRenderer.on("context:changed", listener);
     return () => ipcRenderer.removeListener("context:changed", listener);
   },
+  retryContext: () => ipcRenderer.invoke("context:retry") as Promise<void>,
 } satisfies LinerfyDesktopBridge);

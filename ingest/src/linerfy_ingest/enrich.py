@@ -7,13 +7,21 @@ maps them to a summarizer corpus, and produces a provenance-checked summary.
 
 from __future__ import annotations
 
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from .critiquebrainz import CRITIQUEBRAINZ_SOURCE, CritiqueBrainzAdapter
 from .critiquebrainz import to_document as cb_document
 from .entities import ReleaseGroup
-from .models import Genre, ReleaseEntity, ReviewDocument, ReviewSource, Summary, license_pool
+from .models import (
+    Genre,
+    Rating,
+    ReleaseEntity,
+    ReviewDocument,
+    ReviewSource,
+    Summary,
+    license_pool,
+)
 from .summarize import CorpusDocument, summarize
 from .wikipedia import WIKIPEDIA_SOURCE, WikipediaAdapter, normalize_article_title
 from .wikipedia import to_document as wiki_document
@@ -35,8 +43,12 @@ def corpus_from_documents(documents: list[ReviewDocument]) -> list[CorpusDocumen
 
 
 def pool_for_document(document: ReviewDocument) -> str:
-    """The license-compatibility pool a document belongs to."""
-    return license_pool(document.policy.license_id)
+    """The license-compatibility pool a document belongs to.
+
+    Keyed on the document's own license (not the source policy), so two reviews
+    from one source under different licenses stay in separate pools.
+    """
+    return license_pool(document.license_id)
 
 
 def group_by_pool(
@@ -49,57 +61,26 @@ def group_by_pool(
     return grouped
 
 
-# Tags that describe provenance (language, region, era, format, chart position)
-# rather than a musical style. Matched casefolded against the normalized name.
-# Deliberately small: a conservative cleanup, not a global genre ontology.
-_NON_GENRE_TAGS = frozenset({
-    # languages
-    "english", "german", "french", "spanish", "italian", "portuguese",
-    "japanese", "korean", "chinese", "russian", "dutch", "swedish",
-    "norwegian", "danish", "finnish", "polish", "turkish", "arabic",
-    "hindi", "ukrainian",
-    # countries / nationalities
-    "united states", "usa", "us", "uk", "united kingdom", "canada",
-    "australia", "germany", "france", "italy", "japan", "britain",
-    "british", "american", "america", "ireland", "irish", "australian",
-    "canadian", "europe",
-    # release formats / versions
-    "album", "single", "ep", "compilation", "mixtape", "remix",
-})
-
-# Year / decade tags ("2019", "2010s", "80s").
-_YEAR_TAG = re.compile(r"^\d{4}$|^\d{4}s$|^\d{2}s$")
-# Chart-position tags ("1-4 Wochen", "1–4 weeks"); digits on both sides of the
-# dash so a real genre like "2-step" is never mistaken for a chart range.
-_CHART_TAG = re.compile(r"^\d+\s*[-–—]\s*\d+")
-
-
-def _is_non_genre(name: str) -> bool:
-    """True when a normalized tag name is provenance, not a musical style."""
-    if name.casefold() in _NON_GENRE_TAGS:
-        return True
-    return bool(_YEAR_TAG.match(name) or _CHART_TAG.match(name))
-
-
 _MAX_GENRES = 5
 
 
 def genres_from_release_group(release_group: ReleaseGroup) -> list[Genre]:
-    """Return a short, deduplicated genre list from MusicBrainz tags.
+    """Return a short, deduplicated genre list from MusicBrainz's curated genres.
 
-    Tags are user-supplied and often carry provenance (language, region, era,
-    format, chart position) rather than a style. Only the most-voted tags that
-    are plausibly genres survive, ordered by vote count and capped at a handful,
-    so a low-confidence tag never displaces a stronger one and provenance tags
-    are never shown as genres.
+    MusicBrainz's ``genres`` list is maintained and voted on, so it needs no
+    provenance denylist (unlike the user-supplied ``tags`` folksonomy, which
+    carried languages, regions, eras and chart positions). The most-voted genres
+    survive, ordered by vote count and capped at a handful, so a low-confidence
+    genre never displaces a stronger one. No reliable genre leaves the list
+    empty.
     """
-    ranked = sorted(release_group.tags, key=lambda tag: tag.count, reverse=True)
+    ranked = sorted(release_group.genres, key=lambda genre: genre.count, reverse=True)
     genres: list[Genre] = []
     seen: set[str] = set()
-    for tag in ranked:
-        name = " ".join(tag.name.split())
+    for item in ranked:
+        name = " ".join(item.name.split())
         key = name.casefold()
-        if not name or key in seen or _is_non_genre(name):
+        if not name or key in seen or item.count <= 0:
             continue
         seen.add(key)
         genres.append(
@@ -110,6 +91,38 @@ def genres_from_release_group(release_group: ReleaseGroup) -> list[Genre]:
     return genres
 
 
+@dataclass(frozen=True)
+class SourceFetchResult:
+    """One source's fetched documents plus its optional rating snapshot.
+
+    ``error`` is the exception type name when the source's fetch failed (so a
+    slow or failing source never blocks a faster one, and the caller can tell a
+    genuine "no coverage" from a remote/parse failure).
+    """
+
+    source: ReviewSource
+    documents: list[ReviewDocument]
+    rating: Rating | None = None
+    error: str | None = None
+
+
+def _cb_rating(listing, release_group: ReleaseGroup) -> Rating | None:
+    """The official CritiqueBrainz aggregate rating, if the listing carries one.
+
+    ``average_rating`` is the provider's own value + population count on its
+    0–5 scale; the individual per-review ratings are not averaged locally.
+    """
+    if listing.average_rating is None:
+        return None
+    return Rating(
+        provider=CRITIQUEBRAINZ_SOURCE.id,
+        value=listing.average_rating,
+        scale=5,
+        vote_count=listing.rating_count or None,
+        source_url=f"https://critiquebrainz.org/release-group/{release_group.mbid}",
+    )
+
+
 def build_documents(
     release_group: ReleaseGroup,
     release: ReleaseEntity,
@@ -117,10 +130,17 @@ def build_documents(
     critiquebrainz: CritiqueBrainzAdapter,
     wikipedia: WikipediaAdapter,
 ) -> list[ReviewDocument]:
-    """Fetch licensed review documents for a resolved release group."""
+    """Fetch licensed review documents for a resolved release group.
+
+    Rating-only CritiqueBrainz reviews are dropped here: they carry no body, so
+    they are not review documents and must not be summarized.
+    """
+    listing = critiquebrainz.search_reviews(release_group.mbid)
     documents: list[ReviewDocument] = []
-    for review in critiquebrainz.search_reviews(release_group.mbid):
-        documents.append(cb_document(review, release))
+    for review in listing.reviews:
+        document = cb_document(review, release)
+        if document is not None:
+            documents.append(document)
     article_title = normalize_article_title(article_title)
     reception = wikipedia.reception_section(article_title, artist=release_group.artist)
     if reception is not None:
@@ -134,28 +154,48 @@ def fetch_documents_parallel(
     article_title: str,
     critiquebrainz: CritiqueBrainzAdapter,
     wikipedia: WikipediaAdapter,
-) -> list[tuple[ReviewSource, list[ReviewDocument]]]:
-    """Fetch CritiqueBrainz and Wikipedia in parallel.
+):
+    """Fetch CritiqueBrainz and Wikipedia in parallel, yielding per source.
 
-    Returns one ``(source, documents)`` pair per source, in completion order, so
-    the caller can persist a fast source's documents without waiting for the
-    slower one. The two adapters only do network I/O here, so threads are safe.
+    Yields one ``SourceFetchResult`` per source, in completion order, so the
+    caller persists a fast source's documents (and rating) as soon as it
+    finishes, without waiting for the slower one. A source that raises is
+    yielded as an empty result carrying its ``error`` label, so one source's
+    failure never prevents the other from being saved.
     """
     article_title = normalize_article_title(article_title)
 
-    def fetch_cb() -> tuple[ReviewSource, list[ReviewDocument]]:
-        reviews = critiquebrainz.search_reviews(release_group.mbid)
-        return CRITIQUEBRAINZ_SOURCE, [cb_document(r, release) for r in reviews]
+    def fetch_cb() -> SourceFetchResult:
+        try:
+            listing = critiquebrainz.search_reviews(release_group.mbid)
+            documents = [
+                document
+                for review in listing.reviews
+                if (document := cb_document(review, release)) is not None
+            ]
+            return SourceFetchResult(
+                CRITIQUEBRAINZ_SOURCE, documents, _cb_rating(listing, release_group)
+            )
+        except Exception as exc:  # noqa: BLE001 — isolate one source's failure
+            return SourceFetchResult(CRITIQUEBRAINZ_SOURCE, [], error=type(exc).__name__)
 
-    def fetch_wiki() -> tuple[ReviewSource, list[ReviewDocument]]:
-        reception = wikipedia.reception_section(article_title, artist=release_group.artist)
-        if reception is None:
-            return WIKIPEDIA_SOURCE, []
-        return WIKIPEDIA_SOURCE, [wiki_document(reception, release, article_title)]
+    def fetch_wiki() -> SourceFetchResult:
+        try:
+            reception = wikipedia.reception_section(
+                article_title, artist=release_group.artist
+            )
+            if reception is None:
+                return SourceFetchResult(WIKIPEDIA_SOURCE, [])
+            return SourceFetchResult(
+                WIKIPEDIA_SOURCE, [wiki_document(reception, release, article_title)]
+            )
+        except Exception as exc:  # noqa: BLE001 — isolate one source's failure
+            return SourceFetchResult(WIKIPEDIA_SOURCE, [], error=type(exc).__name__)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(fetch_cb), pool.submit(fetch_wiki)]
-        return [future.result() for future in as_completed(futures)]
+        for future in as_completed(futures):
+            yield future.result()
 
 
 def enrich_release(

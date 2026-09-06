@@ -203,11 +203,10 @@ def read_stored_documents(conn, release_slug: str) -> list[StoredDocument]:
     """
     release_id = uuid.UUID(stable_uuid("release", release_slug))
     rows = conn.execute(
-        "SELECT d.slug, s.slug, p.license_id, p.license_url, s.publication, "
+        "SELECT d.slug, s.slug, d.license_id, d.license_url, s.publication, "
         "COALESCE(b.content, d.title) "
         "FROM public.review_documents d "
         "JOIN public.review_sources s ON s.id = d.source_id "
-        "JOIN public.source_policies p ON p.source_id = s.id "
         "LEFT JOIN public.review_document_bodies b ON b.document_id = d.id "
         "WHERE d.release_id = %s AND d.status = 'published'",
         (release_id,),
@@ -234,7 +233,7 @@ def _scope_key(summary: Summary) -> str:
     if summary.kind == "consensus":
         return f"consensus::{summary.license_pool}"
     scope = summary.source_id or summary.license_pool or "unscoped"
-    return f"source::{scope}"
+    return f"source::{scope}::{summary.license_pool}"
 
 
 def _publish_generation(

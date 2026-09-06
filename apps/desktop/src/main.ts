@@ -36,6 +36,7 @@ import {
   type ContextState,
 } from "./context-state";
 import {
+  InvalidRefreshTokenError,
   performOAuthFlow,
   refreshSession,
   type SupabaseSession,
@@ -98,6 +99,9 @@ let state: WindowState = defaultWindowState();
 let isQuitting = false;
 let pollTimer: NodeJS.Timeout | null = null;
 let nowPlayingPollInFlight = false;
+// Bumped on every start/stop so a now-playing read that resolves after the
+// window was hidden can tell it is stale and must not restart the context poll.
+let pollEpoch = 0;
 
 const stateFile = () => `${app.getPath("userData")}/window-state.json`;
 const tokenFile = () => `${app.getPath("userData")}/session-token.json`;
@@ -158,12 +162,29 @@ function sendAuthState() {
   }
 }
 
-// Refresh the persisted session with its refresh token, or clear it and sign
-// out if the refresh fails (revoked/expired refresh token). Returns the fresh
-// session, or null when there is nothing usable left.
+// Refresh the persisted session with its refresh token. Clears it and signs out
+// only when the refresh token is definitively rejected (revoked/expired); a
+// transient network or 5xx failure leaves the stored session intact. Returns
+// the fresh session, or null when there is nothing usable right now.
+let refreshInFlight: Promise<SupabaseSession | null> | null = null;
+
 async function refreshOrClear(): Promise<SupabaseSession | null> {
   const session = loadSession();
   if (!session) return null;
+  // Single-flight: concurrent callers share one refresh so a rotated refresh
+  // token is never overwritten by a second, stale refresh.
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefresh(session);
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+}
+
+async function doRefresh(
+  session: SupabaseSession,
+): Promise<SupabaseSession | null> {
   const config = oauthConfig();
   if (!config) {
     tokenStore?.clear();
@@ -176,12 +197,19 @@ async function refreshOrClear(): Promise<SupabaseSession | null> {
       session.refresh_token,
       net.fetch,
     );
+    if (loadSession()?.refresh_token !== session.refresh_token)
+      return loadSession();
     tokenStore?.save(JSON.stringify(refreshed));
-    return refreshed;
-  } catch {
-    tokenStore?.clear();
     sendAuthState();
-    return null;
+    return refreshed;
+  } catch (error) {
+    if (error instanceof InvalidRefreshTokenError) {
+      if (loadSession()?.refresh_token === session.refresh_token)
+        tokenStore?.clear();
+      sendAuthState();
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -212,6 +240,7 @@ function sendContext(state: ContextState) {
 async function fetchContextOutcome(
   track: NowPlayingTrack,
   signal: AbortSignal,
+  retry = false,
 ): Promise<FetchOutcome> {
   if (!apiUrl) return { status: "unauthorized" };
   const session = await ensureFreshSession();
@@ -230,6 +259,7 @@ async function fetchContextOutcome(
         artist: track.artist,
         album: track.album,
         state: track.state,
+        retry,
       }),
       signal,
     });
@@ -257,6 +287,12 @@ async function fetchContextOutcome(
       sendAuthState();
       return { status: "unauthorized" };
     }
+  }
+
+  // Any other non-2xx (429/5xx) is a transient server failure, not a malformed
+  // response; surface it as retryable instead of "response format error".
+  if (!response.ok) {
+    return { status: "network-error" };
   }
 
   try {
@@ -309,10 +345,12 @@ function captureWindowBounds(window: BrowserWindow) {
 
 function sendNowPlaying() {
   if (nowPlayingPollInFlight || !mainWindow || mainWindow.isDestroyed()) return;
+  const epoch = pollEpoch;
   nowPlayingPollInFlight = true;
   void nowPlaying
     .getNowPlaying()
     .then((track) => {
+      if (epoch !== pollEpoch) return; // polling stopped while this read was in flight
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("now-playing:changed", track);
       }
@@ -326,11 +364,13 @@ function sendNowPlaying() {
 
 function startPolling() {
   if (pollTimer) return;
+  pollEpoch += 1;
   sendNowPlaying();
   pollTimer = setInterval(sendNowPlaying, POLL_INTERVAL_MS);
 }
 
 function stopPolling() {
+  pollEpoch += 1;
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -430,6 +470,16 @@ ipcMain.handle("playback:seek", async (_event, positionMs: unknown) => {
 
 ipcMain.handle("auth:get-state", () => loginState());
 
+// Re-request the current album without a track change, sign-out, or app
+// restart. Used by the renderer's retry button after a failed fetch. `rearm`
+// bypasses the active-track-key guard so the same album re-enters the
+// requestable state.
+ipcMain.handle("context:retry", async () => {
+  if (process.platform !== "darwin") return;
+  const track = await nowPlaying.getNowPlaying();
+  contextEngine.rearm(track, true);
+});
+
 ipcMain.handle("auth:sign-out", () => {
   tokenStore?.clear();
   contextEngine.stop();
@@ -453,9 +503,9 @@ ipcMain.handle("auth:sign-in", async (): Promise<SignInResult> => {
     );
     tokenStore?.save(JSON.stringify(session));
     sendAuthState();
-    void nowPlaying
-      .getNowPlaying()
-      .then((track) => contextEngine.onTrack(track));
+    // Re-request the current album now that a session exists; `rearm` bypasses
+    // the active-track-key guard so a signed-out poll doesn't block the request.
+    void nowPlaying.getNowPlaying().then((track) => contextEngine.rearm(track));
     return loginState();
   } catch (error) {
     return {

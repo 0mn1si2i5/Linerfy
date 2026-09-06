@@ -13,6 +13,7 @@ export const nowPlayingRequestSchema = z.object({
   album: z.string().min(1).max(500),
   providerUrl: z.string().max(2048).optional(),
   state: z.enum(["playing", "paused"]).default("playing"),
+  retry: z.boolean().optional(),
 });
 
 export type NowPlayingRequest = z.infer<typeof nowPlayingRequestSchema>;
@@ -21,18 +22,46 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** Mirrors `NowPlayingRequest.fingerprint()` in the ingest package. */
-export function requestFingerprint(request: NowPlayingRequest): string {
-  const key = `${request.provider}:${normalize(request.artist)}|${normalize(request.album)}`;
-  return createHash("sha256").update(key, "utf8").digest("hex");
+function digest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+/**
+ * Mirrors `NowPlayingRequest.fingerprint()` in the ingest package. Each field is
+ * hashed to a fixed-length hex first, then combined, so a field that contains
+ * `:` or `|` can never collide with the separator and the two ends stay
+ * byte-for-byte identical (see request.py).
+ */
+export function requestFingerprint(request: NowPlayingRequest): string {
+  const artist = digest(normalize(request.artist));
+  const album = digest(normalize(request.album));
+  return digest(`${request.provider}:${artist}:${album}`);
+}
+
+/** Read compatibility for jobs queued before per-field hashing. */
+export function legacyRequestFingerprint(request: NowPlayingRequest): string {
+  return digest(
+    `${request.provider}:${normalize(request.artist)}|${normalize(request.album)}`,
+  );
+}
+
+/**
+ * Mirrors `_slugify()` in the ingest pipeline. A readable ASCII slug is only
+ * safe when the name is entirely ASCII: otherwise stripping non-ASCII letters
+ * (accented Latin, CJK, …) collapses distinct names onto the same slug (the
+ * "unknown-unknown" collision). Non-ASCII names hash their NFC-normalized form
+ * instead, so identity is lossless and identical on both sides.
+ */
 function slugify(text: string): string {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "unknown";
+  const isAscii = /^[\x00-\x7F]*$/.test(text);
+  if (isAscii) {
+    const slug = text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return slug || "unknown";
+  }
+  return digest(text.normalize("NFC")).slice(0, 12);
 }
 
 /** Mirrors `_release_slug()` in the ingest pipeline. */

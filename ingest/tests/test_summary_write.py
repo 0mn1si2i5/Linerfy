@@ -104,8 +104,9 @@ def _insert_atomic_catalog(conn) -> dict:
         slug = f"atomic-doc-{i}"
         conn.execute(
             "INSERT INTO public.review_documents "
-            "(id, slug, release_id, source_id, source_url, title, content_fingerprint, status) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            "(id, slug, release_id, source_id, source_url, title, license_id, "
+            " license_url, content_fingerprint, status) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 _sid("document", slug),
                 slug,
@@ -113,6 +114,8 @@ def _insert_atomic_catalog(conn) -> dict:
                 ids["source"],
                 f"https://example.com/{slug}",
                 slug,
+                "proprietary",
+                "https://example.com/license",
                 f"fingerprint-{slug}",
                 "published",
             ),
@@ -348,7 +351,7 @@ def test_source_a_publish_does_not_touch_source_b() -> None:
                 "SELECT scope, status FROM public.summary_runs WHERE release_id = %s",
                 (ids["release"],),
             ).fetchall()
-            assert {row[0] for row in scopes} == {"source::src-a"}
+            assert {row[0] for row in scopes} == {"source::src-a::proprietary"}
             # No published row exists for a different source.
             assert all(row[1] == "published" for row in scopes)
     finally:
@@ -391,7 +394,8 @@ def test_consensus_skipped_is_published() -> None:
             cleanup(conn, artist_id=ids["artist"], source_id=ids["source"])
 
 
-def test_two_sources_and_two_pools_all_publish() -> None:
+@pytest.mark.parametrize("second_source", ["src-a", "src-b"])
+def test_two_sources_and_two_pools_all_publish(second_source: str) -> None:
     with connect() as conn:
         skip_unless_test_db(conn)
         ids = _insert_atomic_catalog(conn)
@@ -402,7 +406,7 @@ def test_two_sources_and_two_pools_all_publish() -> None:
             ["结论一", "结论二", "结论三"], source_id="src-a", license_pool="pool-1"
         )
         source_b = _summary(
-            ["结论四", "结论五", "结论六"], source_id="src-b", license_pool="pool-2"
+            ["结论四", "结论五", "结论六"], source_id=second_source, license_pool="pool-2"
         )
         consensus_1 = _summary(
             ["共识一", "共识二", "共识三"], kind="consensus", license_pool="pool-1", source_id=None
@@ -421,8 +425,8 @@ def test_two_sources_and_two_pools_all_publish() -> None:
                 (ids["release"],),
             ).fetchall()
             assert {row[0] for row in scopes} == {
-                "source::src-a",
-                "source::src-b",
+                "source::src-a::pool-1",
+                f"source::{second_source}::pool-2",
                 "consensus::pool-1",
                 "consensus::pool-2",
             }
@@ -471,6 +475,8 @@ def _synthetic_context(title: str, claim_text: str) -> IngestedContext:
         score_scale=None,
         public_excerpt="A synthetic excerpt.",
         content=None,
+        license_id=policy.license_id,
+        license_url=policy.license_url,
         policy=policy,
     )
     summary = Summary(
@@ -498,7 +504,7 @@ def test_insert_only_seed_does_not_overwrite_existing_records() -> None:
     artist_id = _sid("artist", "synthetic-artist")
     source_id = _sid("source", "synthetic-source")
     release_id = _sid("release", "synthetic-release")
-    summary_run_id = _sid("summary", "synthetic-release::source::unscoped")
+    summary_run_id = _sid("summary", "synthetic-release::source::unscoped::")
 
     with connect() as conn:
         skip_unless_test_db(conn)

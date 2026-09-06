@@ -15,10 +15,11 @@ from linerfy_ingest.critiquebrainz import to_document as cb_document
 from linerfy_ingest.enrich import (
     corpus_from_documents,
     enrich_release,
+    fetch_documents_parallel,
     genres_from_release_group,
     group_by_pool,
 )
-from linerfy_ingest.entities import MusicBrainzTag, ReleaseGroup
+from linerfy_ingest.entities import MusicBrainzGenre, ReleaseGroup
 from linerfy_ingest.models import ReleaseEntity, ReviewDocument
 from linerfy_ingest.providers import ChatResult
 from linerfy_ingest.wikipedia import WikipediaAdapter
@@ -35,18 +36,20 @@ _RELEASE_GROUP = ReleaseGroup(
 )
 
 _CB_PAYLOAD = {
+    "average_rating": {"rating": 4.0, "count": 1},
     "reviews": [
         {
             "id": "cb-1",
             "entity_id": "rg-nfr",
+            "entity_type": "release_group",
             "text": "A lush, sprawling record.",
             "language": "en",
-            "license": {"id": "CC BY-NC-SA 3.0"},
+            "license_id": "CC BY-SA 3.0",
             "rating": 4,
             "user": {"display_name": "reviewer-one"},
-            "created": "2019-09-03T10:00:00Z",
+            "created": "Fri, 06 Mar 2026 04:06:52 GMT",
         }
-    ]
+    ],
 }
 _WIKI_SECTIONS = {
     "parse": {"sections": [{"index": "1", "line": "Critical reception", "level": "2"}]}
@@ -90,23 +93,24 @@ def _claim_sources(summary) -> set[str]:
 
 
 def test_corpus_from_documents_maps_id_and_full_body() -> None:
-    reviews = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
-    document = cb_document(reviews[0], _RELEASE)
+    listing = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
+    document = cb_document(listing.reviews[0], _RELEASE)
+    assert document is not None
     corpus = corpus_from_documents([document])
     assert corpus[0].id == "critiquebrainz-cb-1"
     assert corpus[0].text == "A lush, sprawling record."
 
 
-def test_musicbrainz_tags_become_metadata_genres_without_review_citations() -> None:
+def test_musicbrainz_genres_become_metadata_genres_without_review_citations() -> None:
     group = ReleaseGroup(
         mbid="rg-tags",
         title="Album",
         artist="Artist",
-        tags=(
-            MusicBrainzTag(name="art pop", count=10),
-            MusicBrainzTag(name="Art Pop", count=9),
-            MusicBrainzTag(name="baroque pop", count=8),
-            MusicBrainzTag(name="dream pop", count=7),
+        genres=(
+            MusicBrainzGenre(name="art pop", count=10),
+            MusicBrainzGenre(name="Art Pop", count=9),
+            MusicBrainzGenre(name="baroque pop", count=8),
+            MusicBrainzGenre(name="dream pop", count=7),
         ),
     )
 
@@ -119,45 +123,73 @@ def test_musicbrainz_tags_become_metadata_genres_without_review_citations() -> N
     assert all(genre.source_ids == [] for genre in genres)
 
 
-def test_musicbrainz_tags_skip_language_region_era_and_chart_tags() -> None:
+def test_musicbrainz_genres_are_ranked_deduplicated_and_capped() -> None:
     group = ReleaseGroup(
-        mbid="rg-filter",
+        mbid="rg-rank",
         title="Album",
         artist="Artist",
-        tags=(
-            MusicBrainzTag(name="English", count=50),
-            MusicBrainzTag(name="1–4 Wochen", count=40),
-            MusicBrainzTag(name="2010s", count=30),
-            MusicBrainzTag(name="United States", count=20),
-            MusicBrainzTag(name="art pop", count=10),
-            MusicBrainzTag(name="baroque pop", count=8),
+        genres=(
+            MusicBrainzGenre(name="rock", count=3),
+            MusicBrainzGenre(name="indie rock", count=1),
+            MusicBrainzGenre(name="psychedelic rock", count=6),
+            MusicBrainzGenre(name="dream pop", count=2),
+            MusicBrainzGenre(name="synth-pop", count=1),
+            MusicBrainzGenre(name="electronic", count=1),
         ),
     )
 
     assert [genre.name for genre in genres_from_release_group(group)] == [
-        "Art Pop",
-        "Baroque Pop",
+        "Psychedelic Rock",
+        "Rock",
+        "Dream Pop",
+        "Indie Rock",
+        "Synth-Pop",
     ]
 
 
 def test_group_by_pool_separates_incompatible_licenses() -> None:
-    reviews = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
+    listing = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
     wiki = FakeWiki(_WIKI_SECTIONS, _WIKI_TEXT).reception_section("Norman Fucking Rockwell!")
+    cb = cb_document(listing.reviews[0], _RELEASE)
+    assert cb is not None
     documents: list[ReviewDocument] = [
-        cb_document(reviews[0], _RELEASE),
+        cb,
         wiki_document(wiki, _RELEASE, "Norman Fucking Rockwell!"),
     ]
     grouped = group_by_pool(documents)
-    assert set(grouped) == {"CC BY-NC-SA 3.0", "CC BY-SA 4.0"}
+    assert set(grouped) == {"CC BY-SA 3.0", "CC BY-SA 4.0"}
 
 
 def test_same_license_documents_share_one_pool() -> None:
-    reviews = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
-    doc1 = cb_document(reviews[0], _RELEASE)
+    listing = FakeCB(_CB_PAYLOAD).search_reviews("rg-nfr")
+    doc1 = cb_document(listing.reviews[0], _RELEASE)
+    assert doc1 is not None
     doc2 = doc1.model_copy(update={"id": "critiquebrainz-cb-2"})
     grouped = group_by_pool([doc1, doc2])
-    assert set(grouped) == {"CC BY-NC-SA 3.0"}
-    assert len(grouped["CC BY-NC-SA 3.0"]) == 2
+    assert set(grouped) == {"CC BY-SA 3.0"}
+    assert len(grouped["CC BY-SA 3.0"]) == 2
+
+
+def test_fetch_documents_parallel_isolates_a_source_failure() -> None:
+    class FailingCB(CritiqueBrainzAdapter):
+        def search_reviews(self, mbid):
+            raise ValueError("boom")
+
+    results = list(
+        fetch_documents_parallel(
+            _RELEASE_GROUP,
+            _RELEASE,
+            "Norman Fucking Rockwell!",
+            FailingCB(),
+            FakeWiki(_WIKI_SECTIONS, _WIKI_TEXT),
+        )
+    )
+    by_source = {result.source.id: result for result in results}
+
+    assert by_source["critiquebrainz"].documents == []
+    assert by_source["critiquebrainz"].error == "ValueError"
+    assert len(by_source["wikipedia"].documents) == 1
+    assert by_source["wikipedia"].error is None
 
 
 def test_enrich_release_partitions_by_pool_and_never_crosses() -> None:
@@ -170,9 +202,9 @@ def test_enrich_release_partitions_by_pool_and_never_crosses() -> None:
         model="deepseek-chat",
         chat=_echo_chat(),
     )
-    assert set(summaries) == {"CC BY-NC-SA 3.0", "CC BY-SA 4.0"}
+    assert set(summaries) == {"CC BY-SA 3.0", "CC BY-SA 4.0"}
 
-    critiquebrainz = _claim_sources(summaries["CC BY-NC-SA 3.0"])
+    critiquebrainz = _claim_sources(summaries["CC BY-SA 3.0"])
     wikipedia = _claim_sources(summaries["CC BY-SA 4.0"])
 
     assert critiquebrainz == {"critiquebrainz-cb-1"}

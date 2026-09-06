@@ -20,8 +20,13 @@ _VALID_PROVIDERS = ("spotify", "apple-music")
 
 
 def normalize(value: str) -> str:
-    """Case-fold and collapse whitespace for stable fingerprinting."""
-    return " ".join(value.casefold().split())
+    """Lowercase and collapse whitespace for stable fingerprinting.
+
+    Uses ``str.lower`` (simple case mapping) rather than ``str.casefold`` so the
+    result matches the web side's ``String.prototype.toLowerCase``; the two ends
+    must agree byte-for-byte on the request key (see apps/web/lib/request.ts).
+    """
+    return " ".join(value.lower().split())
 
 
 class NowPlayingRequest(BaseModel):
@@ -49,8 +54,14 @@ class NowPlayingRequest(BaseModel):
         ``provider_url`` identifies a track, while enrichment and published
         context are release-level. It therefore cannot participate in this key:
         every track on one album must resolve to the same enrichment job.
+
+        Each field is hashed to a fixed-length hex before being combined, so a
+        field containing ``:`` or ``|`` cannot collide with the separator, and
+        the result matches the web side byte-for-byte (see request.ts).
         """
-        key = f"{self.provider}:{normalize(self.artist)}|{normalize(self.album)}"
+        artist = hashlib.sha256(normalize(self.artist).encode("utf-8")).hexdigest()
+        album = hashlib.sha256(normalize(self.album).encode("utf-8")).hexdigest()
+        key = f"{self.provider}:{artist}:{album}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def lookup_key(self) -> dict[str, str]:

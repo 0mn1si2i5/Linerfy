@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
-from .entities import EntityMatchResult, MusicBrainzTag, ReleaseGroup
+from .entities import EntityMatchResult, MusicBrainzGenre, ReleaseGroup
 
 _MB_BASE = "https://musicbrainz.org/ws/2"
 _CAA_BASE = "https://coverartarchive.org"
@@ -103,19 +103,19 @@ class MusicBrainzAdapter:
         ]
 
     def get_release_group(self, mbid: str) -> ReleaseGroup:
-        url = f"{_MB_BASE}/release-group/{mbid}?inc=tags+ratings+artist-credits&fmt=json"
+        url = f"{_MB_BASE}/release-group/{mbid}?inc=genres+ratings+artist-credits&fmt=json"
         payload = self._get_json(url)
         rating = payload.get("rating", {}) or {}
-        tags = tuple(
-            MusicBrainzTag(name=item["name"], count=item.get("count", 0))
-            for item in payload.get("tags", [])
+        genres = tuple(
+            MusicBrainzGenre(name=item["name"], count=item.get("count", 0))
+            for item in payload.get("genres", [])
         )
         return ReleaseGroup(
             mbid=mbid,
             title=payload.get("title", ""),
             artist=_artist_name(payload),
             first_release_date=payload.get("first-release-date"),
-            tags=tags,
+            genres=genres,
             rating=rating.get("value"),
             rating_votes=rating.get("votes-count", 0) or 0,
             artwork_url=front_url(mbid),
@@ -130,6 +130,11 @@ def resolve_release_group(
     Only a result whose search score meets ``MATCH_THRESHOLD`` is treated as a
     match. Anything below the threshold, or with no candidates, is returned as
     ``unreliable``/``not-found`` so callers never persist a guessed entity.
+
+    The returned release group is the search result (mbid/title/artist/score),
+    not the enriched detail lookup: the fetch stage performs the single enriched
+    ``get_release_group`` call, so resolving does not pay for a detail request
+    whose tags/rating would be thrown away here.
     """
     candidates = adapter.search_release_groups(artist, album)
     if not candidates:
@@ -146,5 +151,15 @@ def resolve_release_group(
             reason=f"top score {top.score} is below threshold {MATCH_THRESHOLD}",
         )
 
-    enriched = adapter.get_release_group(top.mbid)
-    return EntityMatchResult(status="matched", release_group=enriched)
+    # A score tie across distinct release groups is a homonym ranking alone
+    # cannot resolve (e.g. two different artists' albums named the same). Refuse
+    # rather than trust Lucene's arbitrary first result.
+    tied = [c for c in candidates if c.score == top.score and c.mbid != top.mbid]
+    if tied:
+        return EntityMatchResult(
+            status="unreliable",
+            candidates=tuple(candidates),
+            reason="multiple release groups share the top score",
+        )
+
+    return EntityMatchResult(status="matched", release_group=top)

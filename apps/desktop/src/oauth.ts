@@ -100,6 +100,9 @@ export async function exchangeCodeForSession(
   };
 }
 
+/** The refresh token was rejected: the stored session is invalid/revoked. */
+export class InvalidRefreshTokenError extends Error {}
+
 /** Refresh an expired access token using the persisted refresh token (GoTrue). */
 export async function refreshSession(
   config: OAuthConfig,
@@ -115,9 +118,17 @@ export async function refreshSession(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ refresh_token: refreshToken }),
+      signal: AbortSignal.timeout(15_000),
     },
   );
   if (!res.ok) {
+    // A 400/401 is a definitive rejection of the refresh token (cleared by the
+    // caller); a 5xx/429 is transient and must not clear a stored session.
+    if (res.status === 400 || res.status === 401) {
+      throw new InvalidRefreshTokenError(
+        `token refresh failed: HTTP ${res.status}`,
+      );
+    }
     throw new Error(`token refresh failed: HTTP ${res.status}`);
   }
   const data = (await res.json()) as {

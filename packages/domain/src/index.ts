@@ -9,7 +9,8 @@ export const releaseSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   artistId: z.string().min(1),
-  year: z.number().int().min(1900).max(2100),
+  // Unknown release years are omitted, never guessed from the current date.
+  year: z.number().int().min(1900).max(2100).optional(),
   artworkUrl: z.url().optional(),
 });
 
@@ -53,6 +54,17 @@ export const genreSchema = z.object({
   // Metadata authorities such as MusicBrainz may supply a tag without a
   // review-document citation. Generated claims still require citations.
   sourceIds: z.array(z.string().min(1)).default([]),
+});
+
+// A release-level rating snapshot from one provider (MusicBrainz community
+// rating, CritiqueBrainz official average). `voteCount` is omitted when the
+// provider does not report a population count (never written as 0).
+export const ratingSchema = z.object({
+  provider: z.string().min(1),
+  value: z.number().nonnegative(),
+  scale: z.number().positive(),
+  voteCount: z.number().int().nonnegative().optional(),
+  sourceUrl: z.url().optional(),
 });
 
 export const citedClaimSchema = z.object({
@@ -102,7 +114,8 @@ export const musicContextSchema = z
     release: releaseSchema,
     recordings: z.array(recordingSchema),
     genres: z.array(genreSchema),
-    sources: z.array(reviewSourceSchema).min(1),
+    ratings: z.array(ratingSchema),
+    sources: z.array(reviewSourceSchema),
     excerpts: z.array(reviewExcerptSchema),
     sourceSummaries: z.array(sourceSummarySchema),
     consensusBlocks: z.array(consensusBlockSchema),
@@ -173,7 +186,13 @@ export const contextApiResponseSchema = z.discriminatedUnion("status", [
   }),
   z.object({ status: z.literal("unavailable") }),
   z.object({ status: z.literal("ambiguous") }),
-  z.object({ status: z.literal("failed"), stage: z.string().optional() }),
+  // A failed job may still carry whatever was published before the failure; the
+  // client shows it instead of discarding already-delivered content.
+  z.object({
+    status: z.literal("failed"),
+    stage: z.string().optional(),
+    context: musicContextSchema.optional(),
+  }),
 ]);
 
 export type Artist = z.infer<typeof artistSchema>;
@@ -182,6 +201,7 @@ export type Recording = z.infer<typeof recordingSchema>;
 export type ReviewSource = z.infer<typeof reviewSourceSchema>;
 export type ReviewExcerpt = z.infer<typeof reviewExcerptSchema>;
 export type Genre = z.infer<typeof genreSchema>;
+export type Rating = z.infer<typeof ratingSchema>;
 export type CitedClaim = z.infer<typeof citedClaimSchema>;
 export type License = z.infer<typeof licenseSchema>;
 export type SourceSummary = z.infer<typeof sourceSummarySchema>;
