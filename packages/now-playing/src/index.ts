@@ -79,8 +79,8 @@ export const APPLE_MUSIC_CONTROL_SCRIPTS: Record<PlaybackAction, string> = {
 
 // Seek uses run(argv) so the target position is a separate argument, never
 // interpolated into the program text. argv[0] is a validated number (seconds).
-export const SPOTIFY_SEEK_SCRIPT = `function run(argv) { Application("Spotify").setPlayerPosition(parseFloat(argv[0])); }`;
-export const APPLE_MUSIC_SEEK_SCRIPT = `function run(argv) { Application("Music").setPlayerPosition(parseFloat(argv[0])); }`;
+export const SPOTIFY_SEEK_SCRIPT = `function run(argv) { Application("Spotify").playerPosition = parseFloat(argv[0]); }`;
+export const APPLE_MUSIC_SEEK_SCRIPT = `function run(argv) { Application("Music").playerPosition = parseFloat(argv[0]); }`;
 
 function isPlaybackState(value: unknown): value is PlaybackState {
   return value === "playing" || value === "paused";

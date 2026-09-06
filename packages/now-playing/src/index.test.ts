@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   APPLE_MUSIC_CONTROL_SCRIPTS,
   APPLE_MUSIC_NOW_PLAYING_SCRIPT,
+  APPLE_MUSIC_SEEK_SCRIPT,
   SPOTIFY_CONTROL_SCRIPTS,
   SPOTIFY_NOW_PLAYING_SCRIPT,
   SPOTIFY_SEEK_SCRIPT,
@@ -148,6 +149,14 @@ describe("now-playing provider conflict resolution", () => {
 });
 
 describe("playback control and seek", () => {
+  it.each([SPOTIFY_SEEK_SCRIPT, APPLE_MUSIC_SEEK_SCRIPT])(
+    "assigns the JXA playerPosition property",
+    (script) => {
+      const player = { playerPosition: 0 };
+      new Function("Application", `${script}; run(["61.5"]);`)(() => player);
+      expect(player.playerPosition).toBe(61.5);
+    },
+  );
   it("maps each transport action to its fixed Spotify program", async () => {
     const scriptRunner = vi.fn(async () => "");
     const provider = createSpotifyProvider(scriptRunner);
