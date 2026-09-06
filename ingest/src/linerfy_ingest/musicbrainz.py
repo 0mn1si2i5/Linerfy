@@ -9,6 +9,7 @@ deliberately conservative: a result below the score threshold is reported as
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -137,6 +138,13 @@ def resolve_release_group(
     whose tags/rating would be thrown away here.
     """
     candidates = adapter.search_release_groups(artist, album)
+    if not candidates:
+        # Streaming editions often have no separate release group. Only retry
+        # a recognized trailing edition label; preserve the original identity
+        # and keep the score/tie checks below for the alternative query.
+        base_album = re.sub(r"\s*\(deluxe(?: edition)?\)\s*$", "", album, flags=re.I)
+        if base_album and base_album != album:
+            candidates = adapter.search_release_groups(artist, base_album)
     if not candidates:
         return EntityMatchResult(
             status="not-found",

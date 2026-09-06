@@ -94,6 +94,22 @@ def test_build_handlers_has_all_four_stages() -> None:
     }
 
 
+def test_deluxe_fallback_still_requires_a_reliable_release_group() -> None:
+    from linerfy_ingest.musicbrainz import resolve_release_group
+
+    class EditionMB(FakeMB):
+        def search_release_groups(self, artist, album):
+            if album == "Plastic Beach (Deluxe)":
+                return []
+            assert album == "Plastic Beach"
+            return [self.lookup_result]
+
+    for score, expected in [(100, "matched"), (30, "unreliable")]:
+        rg = ReleaseGroup(mbid="rg-1", title="Plastic Beach", artist="Gorillaz", score=score)
+        result = resolve_release_group("Gorillaz", "Plastic Beach (Deluxe)", EditionMB([], rg))
+        assert result.status == expected
+
+
 def test_resolve_entity_sets_resolution_on_match() -> None:
     store = FakeStore()
     rg = ReleaseGroup(
