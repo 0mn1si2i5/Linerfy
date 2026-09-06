@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createTokenStore, type SafeCrypto } from "./token-store";
 
@@ -41,7 +41,36 @@ describe("createTokenStore", () => {
     const store = createTokenStore(file, fakeCrypto());
     store.save("session-token");
     writeFileSync(file, "not json");
+    expect(createTokenStore(file, fakeCrypto()).load()).toBeNull();
+  });
+
+  it("decrypts only once per process and updates the cache on save/clear", () => {
+    const file = tempFile();
+    createTokenStore(file, fakeCrypto()).save("session-token");
+    const crypto = fakeCrypto();
+    const decrypt = vi.fn(crypto.decrypt);
+    const store = createTokenStore(file, { ...crypto, decrypt });
+    expect(store.load()).toBe("session-token");
+    expect(store.load()).toBe("session-token");
+    store.save("refreshed-token");
+    expect(store.load()).toBe("refreshed-token");
+    store.clear();
     expect(store.load()).toBeNull();
+    expect(decrypt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeatedly prompt after secure storage access is denied", () => {
+    const file = tempFile();
+    createTokenStore(file, fakeCrypto()).save("session-token");
+    const decrypt = vi.fn(() => {
+      throw new Error("access denied");
+    });
+    const store = createTokenStore(file, { ...fakeCrypto(), decrypt });
+    expect(store.load()).toBeNull();
+    expect(store.load()).toBeNull();
+    expect(decrypt).toHaveBeenCalledTimes(1);
+    store.save("new-login");
+    expect(store.load()).toBe("new-login");
   });
 
   it("clears the stored token", () => {

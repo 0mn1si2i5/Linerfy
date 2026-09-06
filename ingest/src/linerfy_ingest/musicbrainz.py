@@ -59,10 +59,7 @@ class MusicBrainzAdapter:
 
     def _wait_for_request_slot(self) -> None:
         if self._last_request_at is not None:
-            remaining = (
-                _MIN_REQUEST_INTERVAL_SECONDS
-                - (self._clock() - self._last_request_at)
-            )
+            remaining = _MIN_REQUEST_INTERVAL_SECONDS - (self._clock() - self._last_request_at)
             if remaining > 0:
                 self._sleep(remaining)
         self._last_request_at = self._clock()
@@ -78,19 +75,17 @@ class MusicBrainzAdapter:
                 with urllib.request.urlopen(request, timeout=20) as response:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
-                if (
-                    exc.code not in _RETRYABLE_HTTP_STATUS
-                    or attempt == _MAX_ATTEMPTS - 1
-                ):
+                if exc.code not in _RETRYABLE_HTTP_STATUS or attempt == _MAX_ATTEMPTS - 1:
                     raise
         raise AssertionError("unreachable")
 
     def search_release_groups(self, artist: str, album: str) -> list[ReleaseGroup]:
-        query = f'releasegroup:"{album}" AND artist:"{artist}"'
-        url = (
-            f"{_MB_BASE}/release-group/?query={urllib.parse.quote(query)}"
-            f"&fmt=json&limit=5"
-        )
+        # URL encoding alone does not escape Lucene phrase syntax.
+        def phrase(value: str) -> str:
+            return value.replace("\\", "\\\\").replace('"', '\\"')
+
+        query = f'releasegroup:"{phrase(album)}" AND artist:"{phrase(artist)}"'
+        url = f"{_MB_BASE}/release-group/?query={urllib.parse.quote(query)}&fmt=json&limit=5"
         payload = self._get_json(url)
         return [
             ReleaseGroup(
@@ -101,6 +96,12 @@ class MusicBrainzAdapter:
                 first_release_date=item.get("first-release-date"),
             )
             for item in payload.get("release-groups", [])
+            # Do not let an explicitly instrumental edition tie with the
+            # ordinary album when the player did not request that edition.
+            if not (
+                item.get("disambiguation", "").casefold() in {"instrumental", "instrumentals"}
+                and "instrumental" not in album.casefold()
+            )
         ]
 
     def get_release_group(self, mbid: str) -> ReleaseGroup:

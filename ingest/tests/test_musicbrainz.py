@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import urllib.error
+import urllib.parse
 
 import pytest
 
@@ -71,6 +72,13 @@ def test_search_parses_release_groups() -> None:
     assert results[0].mbid == "rg-nfr"
     assert results[0].artist == "Lana Del Rey"
     assert results[0].score == 100
+
+
+def test_search_escapes_metadata_inside_lucene_phrases() -> None:
+    adapter = _fake()
+    adapter.search_release_groups('Artist "A"', "Album\\Title")
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(adapter.urls[0]).query)["query"][0]
+    assert query == 'releasegroup:"Album\\\\Title" AND artist:"Artist \\"A\\""'
 
 
 def test_lookup_enriches_genres_and_rating() -> None:
@@ -192,16 +200,30 @@ def test_adapter_retries_a_transient_503_after_rate_limit_delay(
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise urllib.error.HTTPError(
-                request.full_url, 503, "busy", {}, io.BytesIO()
-            )
+            raise urllib.error.HTTPError(request.full_url, 503, "busy", {}, io.BytesIO())
         return _Response(b'{"release-groups": []}')
 
     monkeypatch.setattr(musicbrainz_module.urllib.request, "urlopen", urlopen)
     adapter = MusicBrainzAdapter(clock=lambda: now[0], sleep=sleep)
 
-    assert adapter._get_json("https://musicbrainz.org/retry") == {
-        "release-groups": []
-    }
+    assert adapter._get_json("https://musicbrainz.org/retry") == {"release-groups": []}
     assert calls == 2
     assert sleeps == [pytest.approx(1.05)]
+
+
+def test_search_uses_explicit_instrumental_disambiguation(monkeypatch) -> None:
+    adapter = MusicBrainzAdapter()
+    items = [
+        {
+            "id": "instrumental",
+            "title": "Plastic Beach",
+            "disambiguation": "Instrumentals",
+            "score": 100,
+        },
+        {"id": "regular", "title": "Plastic Beach", "disambiguation": "", "score": 100},
+    ]
+    monkeypatch.setattr(adapter, "_get_json", lambda _: {"release-groups": items})
+    assert [r.mbid for r in adapter.search_release_groups("Gorillaz", "Plastic Beach")] == [
+        "regular"
+    ]
+    assert len(adapter.search_release_groups("Gorillaz", "Plastic Beach Instrumentals")) == 2
