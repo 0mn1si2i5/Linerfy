@@ -1,16 +1,18 @@
 import { MusicContextCard } from "@linerfy/ui";
 import type { NowPlayingTrack } from "@linerfy/now-playing";
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { LoginState } from "./auth-state";
 import {
   contextStatusLabel,
-  stageLabel,
+  trackKey,
   type ContextState,
 } from "./context-state";
+import { lyricsTrackKey, type LyricsResult } from "./lyrics";
+import { LyricsPanel } from "./lyrics-panel";
 import "./renderer.css";
 
 function formatTime(ms: number): string {
@@ -33,6 +35,13 @@ function DesktopApp() {
   const [scrubPosition, setScrubPosition] = useState<number | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [lyrics, setLyrics] = useState<{
+    key: string;
+    result: LyricsResult;
+  } | null>(null);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
+  const lyricsInFlight = useRef<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -94,6 +103,30 @@ function DesktopApp() {
     ? contextStatusLabel(auth.status, context)
     : null;
   const isFailed = context.status === "failed" || context.status === "error";
+  const waiting =
+    auth.status === "signed-in" &&
+    playingTrack !== null &&
+    (context.status === "loading" ||
+      ((context.status === "queued" ||
+        context.status === "running" ||
+        context.status === "partial") &&
+        !context.paused));
+  const albumKey = playingTrack ? trackKey(playingTrack) : null;
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  useEffect(() => {
+    setWaitSeconds(0);
+    if (!waiting) return;
+    const started = Date.now();
+    const timer = window.setInterval(
+      () => setWaitSeconds(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [waiting, albumKey]);
+  const statusMessage =
+    isFailed && contentContext
+      ? `${contextLabel}，已保留已加载内容`
+      : contextLabel;
 
   const durationMs = playingTrack?.durationMs;
   const positionMs = playingTrack?.positionMs;
@@ -113,6 +146,25 @@ function DesktopApp() {
   useEffect(() => {
     setScrubPosition(null);
   }, [trackId]);
+
+  // Load lyrics on first expand and re-request when the track changes while
+  // expanded. Dedup by in-flight key; a stale response for a previous track is
+  // discarded by its track key.
+  const lyricsKey = playingTrack ? lyricsTrackKey(playingTrack) : null;
+  useEffect(() => {
+    if (!lyricsOpen || !lyricsKey) return;
+    if (lyrics?.key === lyricsKey || lyricsInFlight.current === lyricsKey)
+      return;
+    lyricsInFlight.current = lyricsKey;
+    setLyricsLoading(true);
+    void window.linerfy.getLyrics().then((result) => {
+      lyricsInFlight.current = null;
+      if (result.trackKey === lyricsKey) {
+        setLyrics({ key: result.trackKey, result });
+      }
+      setLyricsLoading(false);
+    });
+  }, [lyricsOpen, lyricsKey, lyrics?.key]);
 
   async function handleRetry() {
     setRetrying(true);
@@ -290,10 +342,51 @@ function DesktopApp() {
                 {playbackError}
               </p>
             ) : null}
+            <button
+              className="lyrics-toggle"
+              type="button"
+              aria-expanded={lyricsOpen}
+              onClick={() => setLyricsOpen((open) => !open)}
+            >
+              {lyricsOpen ? "收起歌词" : "歌词"}
+            </button>
+            {lyricsOpen ? (
+              <div className="lyrics-region">
+                <LyricsPanel
+                  track={playingTrack}
+                  result={
+                    lyrics && lyrics.key === lyricsKey ? lyrics.result : null
+                  }
+                  loading={lyricsLoading}
+                />
+              </div>
+            ) : null}
           </section>
         </>
       ) : null}
 
+      {statusMessage ? (
+        <div className="context-status-wrap">
+          {waiting ? (
+            <progress className="context-activity" aria-label="乐评处理中" />
+          ) : null}
+          <div className="context-status-copy">
+            <p
+              className={`context-status ${isFailed ? "error" : "muted"}`}
+              role="status"
+            >
+              {statusMessage}
+            </p>
+            {waiting ? (
+              <p className="context-wait">
+                已等待 {waitSeconds} 秒
+                {waitSeconds >= 60 ? " · 服务响应较慢" : ""}
+              </p>
+            ) : null}
+          </div>
+          {isFailed ? retryButton : null}
+        </div>
+      ) : null}
       {auth.status === "signed-in" && contentContext ? (
         <div className="context">
           <p className="album-review-note">专辑评价</p>
@@ -301,30 +394,6 @@ function DesktopApp() {
             context={contentContext}
             showReleaseHeader={false}
           />
-          {context.status === "partial" || isFailed ? (
-            <div className="context-progress" aria-live="polite">
-              <span>
-                {isFailed
-                  ? context.status === "error"
-                    ? `${context.message}，已保留已加载内容`
-                    : "获取未完成，已保留已加载内容"
-                  : context.status === "partial"
-                    ? `${stageLabel(context.stage)}${context.paused ? "（服务暂停）" : "…"}`
-                    : ""}
-              </span>
-              {isFailed ? retryButton : null}
-            </div>
-          ) : null}
-        </div>
-      ) : contextLabel ? (
-        <div className="context-status-wrap">
-          <p
-            className={`context-status ${context.status === "error" ? "error" : "muted"}`}
-            aria-live="polite"
-          >
-            {contextLabel}
-          </p>
-          {isFailed ? retryButton : null}
         </div>
       ) : null}
     </main>

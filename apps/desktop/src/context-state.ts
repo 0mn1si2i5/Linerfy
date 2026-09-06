@@ -68,9 +68,22 @@ export function contextStatusLabel(
     case "error":
       return context.message;
     case "idle":
+      return "等待获取乐评";
     case "partial":
-    case "ready":
-      return null;
+      return context.paused
+        ? `${stageLabel(context.stage)}…（服务暂停）`
+        : `${stageLabel(context.stage)}…`;
+    case "ready": {
+      const data = context.context;
+      if (
+        data.sourceSummaries.some((summary) => summary.claims.length > 0) ||
+        data.consensusBlocks.some((block) => block.claims.length > 0)
+      )
+        return null;
+      if (data.sources.length) return "已找到来源，暂无可用的乐评总结";
+      if (data.ratings.length) return "仅找到评分，当前来源暂无乐评";
+      return "当前来源未找到这张专辑的乐评";
+    }
   }
 }
 

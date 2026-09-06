@@ -328,6 +328,21 @@ button {
   margin: 0;
 }
 
+.context-status-copy {
+  flex: 1;
+  min-width: 0;
+}
+.context-wait {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.context-activity {
+  width: 32px;
+  height: 4px;
+  accent-color: var(--muted);
+}
+
 .retry-button {
   flex: 0 0 auto;
   min-height: 28px;
@@ -496,39 +511,6 @@ button {
   line-height: 1.35;
 }
 
-.excerpt,
-.license-details {
-  margin-top: 10px;
-}
-
-.excerpt summary,
-.license-details summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  user-select: none;
-}
-
-.excerpt p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.license-details {
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.license-attribution {
-  margin: 6px 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 .source-link {
   display: inline-flex;
   gap: 4px;
@@ -548,4 +530,80 @@ button {
   .context .source-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* Lyrics (collapsible, LRCLIB-backed) */
+
+.lyrics-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--raised);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lyrics-toggle:hover {
+  color: var(--text);
+}
+
+.lyrics-region {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.lyrics-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lyrics-synced,
+.lyrics-plain {
+  max-height: 40vh;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.lyrics-line {
+  margin: 0;
+  padding: 3px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lyrics-line.active {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.lyrics-plain {
+  white-space: pre-line;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.lyrics-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lyrics-note.error {
+  color: #f15e6c;
+}
+
+.lyrics-source {
+  align-self: flex-start;
+  color: var(--muted);
+  font-size: 10px;
+  text-underline-offset: 3px;
 }

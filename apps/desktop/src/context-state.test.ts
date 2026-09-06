@@ -99,17 +99,48 @@ describe("contextStatusLabel", () => {
     );
   });
 
-  it("renders content while partial instead of a status label", () => {
-    // A partial context is safe to show; the label must be null so the renderer
-    // displays the context card (plus its stage note) rather than a loading
-    // message. This is the polling-until-ready contract.
+  it("keeps the stage visible alongside partial content", () => {
     const partial: contextState.ContextState = {
       status: "partial",
       context: featuredContext,
       stage: "build_consensus",
     };
 
-    expect(contextStatusLabel("signed-in", partial)).toBeNull();
+    expect(contextStatusLabel("signed-in", partial)).toBe("生成综合归纳…");
+  });
+
+  it("explains completed requests without summaries instead of leaving a blank", () => {
+    const data = {
+      ...featuredContext,
+      sourceSummaries: [],
+      consensusBlocks: [],
+      sources: [],
+      ratings: [],
+    };
+    expect(
+      contextStatusLabel("signed-in", { status: "ready", context: data }),
+    ).toBe("当前来源未找到这张专辑的乐评");
+    expect(
+      contextStatusLabel("signed-in", {
+        status: "ready",
+        context: {
+          ...data,
+          ratings: [{ provider: "musicbrainz", value: 4, scale: 5 }],
+        },
+      }),
+    ).toBe("仅找到评分，当前来源暂无乐评");
+    expect(
+      contextStatusLabel("signed-in", {
+        status: "ready",
+        context: { ...data, sources: featuredContext.sources },
+      }),
+    ).toBe("已找到来源，暂无可用的乐评总结");
+    expect(
+      contextStatusLabel("signed-in", {
+        status: "ready",
+        context: featuredContext,
+      }),
+    ).toBeNull();
   });
 });
 

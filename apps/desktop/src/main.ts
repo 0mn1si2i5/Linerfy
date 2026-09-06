@@ -41,6 +41,7 @@ import {
   refreshSession,
   type SupabaseSession,
 } from "./oauth";
+import { fetchLyrics } from "./lyrics";
 import { createWindowOptions } from "./security";
 import {
   createTokenStore,
@@ -478,6 +479,21 @@ ipcMain.handle("context:retry", async () => {
   if (process.platform !== "darwin") return;
   const track = await nowPlaying.getNowPlaying();
   contextEngine.rearm(track, true);
+});
+
+// Fetch lyrics for the current track from LRCLIB (the only allowed source).
+// The main process reads its own current track; the renderer never passes a
+// URL or a key. The result carries the track key so the renderer can discard a
+// stale response after a track change.
+ipcMain.handle("lyrics:get", async () => {
+  if (process.platform !== "darwin") {
+    return { status: "unavailable", trackKey: "" };
+  }
+  const track = await nowPlaying.getNowPlaying();
+  if (!track) {
+    return { status: "unavailable", trackKey: "" };
+  }
+  return fetchLyrics(net.fetch, track);
 });
 
 ipcMain.handle("auth:sign-out", () => {

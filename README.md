@@ -33,6 +33,8 @@ Guardian, Pitchfork, AOTY, Metacritic, RYM, Reddit, and other unlicensed or unau
 
 内容展示层级（从上到下）：当前播放与封面 → 曲风 → 相关标签 → 综合观点 → 各来源卡片 → 原文链接。Display order: now-playing + cover → genres → related tags → consensus → source cards → original links.
 
+桌面界面不展示机械截断的摘录或“许可与署名”折叠区；来源链接与后端文档级溯源、许可数据仍保留。The desktop omits truncated excerpts and license disclosure panels; source links and backend document-level provenance/license metadata remain.
+
 - 综合观点仅在至少两个许可证兼容的来源之间合成；单来源总结也按文档许可分池，未知许可不猜测。Consensus requires two compatible sources; source summaries also stay within document-level license pools, with no assumed permission for unknown licenses.
 - 曲风、评分和已发布来源可先于总结显示。一个来源失败不清空已有内容，显式重试恢复原任务，不创建重复队列。Metadata, ratings and published sources appear progressively; failures preserve content and explicit retries resume the existing job.
 - 每条公开 claim 必须能追溯到已保存的 review document；全文永不公开，仅元数据、短摘录/转述与原文链接进入公开输出。Every public claim traces to a stored review document; full text is never public.

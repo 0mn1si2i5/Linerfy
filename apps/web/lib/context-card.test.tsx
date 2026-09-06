@@ -3,6 +3,21 @@ import { expect, it } from "vitest";
 import { featuredContext } from "@linerfy/domain/fixtures";
 import { MusicContextCard } from "@linerfy/ui";
 
+it("keeps summaries and original links without excerpt or license panels", () => {
+  const html = renderToStaticMarkup(
+    <MusicContextCard context={featuredContext} />,
+  );
+  expect(html).not.toContain("许可与署名");
+  expect(html).not.toContain("<details");
+  for (const excerpt of featuredContext.excerpts) {
+    expect(html).not.toContain(excerpt.text);
+  }
+  for (const source of featuredContext.sources) {
+    expect(html).toContain(source.url);
+  }
+  expect(html).toContain("去原文");
+});
+
 it("renders both license pools from the same provider without duplicate provider cards", () => {
   const original = featuredContext.sourceSummaries[0]!;
   const first = {

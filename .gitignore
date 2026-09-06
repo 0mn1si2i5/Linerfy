@@ -18,6 +18,7 @@ __pycache__/
 
 apps/desktop/.vite/
 apps/desktop/out/
+/Linerfy.app/
 ingest/.venv/
 
 # Agent / skill process artifacts (plans, specs, scratch)

@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import type { LoginState, SignInResult } from "./auth-state";
 import type { ContextState } from "./context-state";
+import type { LyricsResult } from "./lyrics";
 
 export interface LinerfyDesktopBridge {
   getNowPlaying(): Promise<NowPlayingTrack | null>;
@@ -19,6 +20,7 @@ export interface LinerfyDesktopBridge {
   onAuthStateChanged(callback: (state: LoginState) => void): () => void;
   onContextChanged(callback: (state: ContextState) => void): () => void;
   retryContext(): Promise<void>;
+  getLyrics(): Promise<LyricsResult>;
 }
 
 contextBridge.exposeInMainWorld("linerfy", {
@@ -56,4 +58,5 @@ contextBridge.exposeInMainWorld("linerfy", {
     return () => ipcRenderer.removeListener("context:changed", listener);
   },
   retryContext: () => ipcRenderer.invoke("context:retry") as Promise<void>,
+  getLyrics: () => ipcRenderer.invoke("lyrics:get") as Promise<LyricsResult>,
 } satisfies LinerfyDesktopBridge);

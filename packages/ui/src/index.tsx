@@ -47,37 +47,6 @@ export function SourceLink({
   );
 }
 
-/**
- * Low-distraction license + attribution, collapsed by default so protocol text
- * never crowds the main body. Uses a native `<details>` element — accessible
- * and keyboard-focusable without any new state.
- */
-function LicenseDetails({
-  attribution,
-  licenseId,
-  licenseUrl,
-}: {
-  attribution: string;
-  licenseId: string;
-  licenseUrl: string;
-}) {
-  return (
-    <details className="license-details">
-      <summary>许可与署名</summary>
-      <p className="license-attribution">{attribution}</p>
-      <a
-        className="source-link"
-        href={licenseUrl}
-        rel="noreferrer"
-        target="_blank"
-      >
-        {licenseId}
-        <span aria-hidden="true">↗</span>
-      </a>
-    </details>
-  );
-}
-
 export function MusicContextCard({
   context,
   showReleaseHeader = true,
@@ -85,7 +54,7 @@ export function MusicContextCard({
   context: MusicContext;
   showReleaseHeader?: boolean;
 }) {
-  // Merge one provider's documents, source summary, and excerpts into a single
+  // Merge one provider's document links and source summaries into a single
   // card. Keyed on the stable provider slug: a document's `providerId` and a
   // source summary's `source.id` are the same source identity, used at their
   // respective call sites (see the domain schema comments). License pools stay
@@ -208,11 +177,6 @@ export function MusicContextCard({
                 );
               })}
             </ul>
-            <LicenseDetails
-              attribution={block.attribution}
-              licenseId={block.license.id}
-              licenseUrl={block.license.url}
-            />
           </section>
         ))}
 
@@ -242,18 +206,10 @@ export function MusicContextCard({
                         </li>
                       ))}
                     </ul>
-                    <LicenseDetails
-                      attribution={summary.attribution}
-                      licenseId={summary.license.id}
-                      licenseUrl={summary.license.url}
-                    />
                   </section>
                 ))}
 
                 {card.documents.map((source) => {
-                  const excerpt = context.excerpts.find(
-                    (item) => item.sourceId === source.id,
-                  );
                   return (
                     <div className="provider-doc" key={source.id}>
                       <div className="provider-doc-heading">
@@ -264,12 +220,6 @@ export function MusicContextCard({
                           </span>
                         ) : null}
                       </div>
-                      {excerpt ? (
-                        <details className="excerpt">
-                          <summary>摘录</summary>
-                          <p>{excerpt.text}</p>
-                        </details>
-                      ) : null}
                       <SourceLink href={source.url}>去原文</SourceLink>
                     </div>
                   );
