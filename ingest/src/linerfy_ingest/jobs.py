@@ -91,11 +91,17 @@ def error_label(exc: BaseException) -> str:
 
     Returns only the exception type name (the error category), so a request
     body, token, key, or full traceback never reaches the durable ``last_error``
-    field or the default worker log. Set ``LINERFY_DEBUG_TRACEBACK=1`` to opt
-    into the full traceback for local debugging.
+    field or the default worker log. A domain exception that carries a static
+    ``category`` (e.g. ``SummaryError``) is labelled ``Type:category`` so an
+    operator can distinguish the actual failure instead of seeing a bare
+    ``ValueError``. Set ``LINERFY_DEBUG_TRACEBACK=1`` to opt into the full
+    traceback for local debugging.
     """
     if os.environ.get("LINERFY_DEBUG_TRACEBACK") == "1":
         return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    category = getattr(exc, "category", None)
+    if isinstance(category, str) and category:
+        return f"{type(exc).__name__}:{category}"
     return type(exc).__name__
 
 

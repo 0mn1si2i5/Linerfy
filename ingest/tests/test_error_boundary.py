@@ -9,6 +9,7 @@ traceback is opt-in via ``LINERFY_DEBUG_TRACEBACK=1``.
 from __future__ import annotations
 
 from linerfy_ingest.jobs import EnrichmentJob, error_label, run_job
+from linerfy_ingest.summarize import SummaryError
 
 _SECRET = "SECRET_TOKEN_abc123"
 
@@ -45,6 +46,22 @@ def test_error_label_debug_opts_into_traceback(monkeypatch) -> None:
     assert "Traceback" in label
     assert "ValueError" in label
     assert _SECRET in label  # opt-in debugging includes the message
+
+
+def test_error_label_uses_summary_error_category() -> None:
+    # A summarization failure records its static category, not a bare ValueError,
+    # so the operator can tell invalid_json / truncated / count / reference apart.
+    assert error_label(SummaryError("invalid_claim_count", "got=1")) == (
+        "SummaryError:invalid_claim_count"
+    )
+
+
+def test_summary_error_label_drops_the_detail() -> None:
+    # `detail` may carry a sensitive value; the durable label must not include it.
+    exc = SummaryError("invalid_reference", f"count=1 {_SECRET}")
+    label = error_label(exc)
+    assert label == "SummaryError:invalid_reference"
+    assert _SECRET not in label
 
 
 def test_run_job_logs_category_and_correlation_not_the_secret(capsys) -> None:

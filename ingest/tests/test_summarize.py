@@ -14,6 +14,7 @@ from linerfy_ingest.providers import ChatResult
 from linerfy_ingest.summarize import (
     _MAX_CLAIM_TEXT_CHARS,
     CorpusDocument,
+    SummaryError,
     _build_messages,
     _build_user_prompt,
     _parse_claims,
@@ -124,8 +125,9 @@ def test_parse_claims_rejects_unknown_source() -> None:
             ("结论三", ["guardian-nfr"]),
         ]
     )
-    with pytest.raises(ValueError, match="unknown sources"):
+    with pytest.raises(SummaryError) as exc_info:
         _parse_claims(raw, {"guardian-nfr"})
+    assert exc_info.value.category == "invalid_reference"
 
 
 def test_parse_claims_deduplicates_sources() -> None:
@@ -140,39 +142,52 @@ def test_parse_claims_deduplicates_sources() -> None:
     assert claims[0].source_ids == ["guardian-nfr", "pitchfork-nfr"]
 
 
-def test_parse_claims_rejects_too_few_claims() -> None:
-    raw = _payload([("一条", ["guardian-nfr"]), ("两条", ["guardian-nfr"])])
-    with pytest.raises(ValueError, match="claims"):
-        _parse_claims(raw, {"guardian-nfr"})
+def test_parse_claims_accepts_a_single_cited_claim() -> None:
+    # A thin corpus (one short reception snippet) can honestly support only one
+    # claim; it must be accepted rather than rejected for falling below three.
+    raw = _payload([("Pitchfork 给予 6.8/10 的评分。", ["guardian-nfr"])])
+    claims = _parse_claims(raw, {"guardian-nfr"})
+    assert [c.text for c in claims] == ["Pitchfork 给予 6.8/10 的评分。"]
+
+
+def test_parse_claims_rejects_zero_claims() -> None:
+    with pytest.raises(SummaryError) as exc_info:
+        _parse_claims('{"claims": []}', {"guardian-nfr"})
+    assert exc_info.value.category == "invalid_claim_count"
 
 
 def test_parse_claims_rejects_too_many_claims() -> None:
     too_many = [(f"结论 {i}", ["guardian-nfr"]) for i in range(6)]
-    with pytest.raises(ValueError, match="claims"):
+    with pytest.raises(SummaryError) as exc_info:
         _parse_claims(_payload(too_many), {"guardian-nfr"})
+    assert exc_info.value.category == "invalid_claim_count"
 
 
 def test_parse_claims_rejects_overlong_text() -> None:
     long_text = "很" * (_MAX_CLAIM_TEXT_CHARS + 1)
     raw = _payload([(long_text, ["guardian-nfr"])] * 3)
-    with pytest.raises(ValueError, match="exceeds"):
+    with pytest.raises(SummaryError) as exc_info:
         _parse_claims(raw, {"guardian-nfr"})
+    assert exc_info.value.category == "too_long"
 
 
 def test_parse_claims_rejects_empty_text() -> None:
     raw = _payload([("   ", ["guardian-nfr"])] * 3)
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(SummaryError) as exc_info:
         _parse_claims(raw, {"guardian-nfr"})
+    assert exc_info.value.category == "invalid_shape"
 
 
 def test_parse_claims_rejects_non_json() -> None:
-    with pytest.raises(ValueError, match="not JSON"):
+    with pytest.raises(SummaryError) as exc_info:
         _parse_claims("no json here at all", {"guardian-nfr"})
+    assert exc_info.value.category == "invalid_json"
 
 
 def test_parse_claims_rejects_invalid_json() -> None:
-    with pytest.raises(ValueError, match="not valid JSON"):
+    with pytest.raises(SummaryError) as exc_info:
         _parse_claims('{"claims": [}', {"guardian-nfr"})
+    assert exc_info.value.category == "invalid_json"
 
 
 # --- summarize orchestration -------------------------------------------------
@@ -186,13 +201,34 @@ def test_summarize_returns_validated_summary() -> None:
 
 
 def test_summarize_rejects_non_stop_finish_reason() -> None:
-    with pytest.raises(ValueError, match="finish_reason"):
+    with pytest.raises(SummaryError) as exc_info:
         summarize(
             _corpus(),
             chat=_fake_chat(_payload(_three_claims()), finish_reason="length"),
         )
+    assert exc_info.value.category == "truncated"
 
 
 def test_summarize_requires_nonempty_corpus() -> None:
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(SummaryError) as exc_info:
         summarize([], chat=_fake_chat(_payload(_three_claims())))
+    assert exc_info.value.category == "empty_corpus"
+
+
+def test_summarize_accepts_a_single_claim_from_a_thin_corpus() -> None:
+    # Regression for the Tennis "Face Down in the Garden" failure: a single
+    # short Wikipedia reception snippet yields one cited claim, not a crash.
+    thin = [
+        CorpusDocument(
+            id="wikipedia-reception",
+            text="It received 6.8/10 review from Pitchfork.",
+        )
+    ]
+    summary = summarize(
+        thin,
+        chat=_fake_chat(
+            _payload([("Pitchfork 给予 6.8/10 的评分。", ["wikipedia-reception"])])
+        ),
+    )
+    assert len(summary.claims) == 1
+    assert summary.claims[0].source_ids == ["wikipedia-reception"]
